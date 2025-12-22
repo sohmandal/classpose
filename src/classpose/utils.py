@@ -11,6 +11,7 @@ import requests
 import torch
 from skimage.measure import label
 from tqdm import tqdm
+from openslide import OpenSlide
 
 from classpose.log import get_logger
 
@@ -411,3 +412,30 @@ def download_if_unavailable(path: str, url: str) -> str:
             ):
                 f.write(chunk)
     return path
+
+
+def get_slide_resolution(openslide_slide: OpenSlide) -> tuple[float, float]:
+    """
+    Get the slide resolution in microns per pixel.
+
+    Args:
+        openslide_slide (OpenSlide): OpenSlide object.
+
+    Returns:
+        tuple[float, float]: Resolution in microns per pixel.
+    """
+    props = openslide_slide.properties
+    x, y = None, None
+    if "openslide.mpp-x" in props and "openslide.mpp-y" in props:
+        x, y = float(props["openslide.mpp-x"]), float(props["openslide.mpp-y"])
+    elif "tiff.XResolution" in props and "tiff.YResolution" in props:
+        x, y = float(props["tiff.XResolution"]), float(
+            props["tiff.YResolution"]
+        )
+        if props["tiff.ResolutionUnit"].lower() == "centimenter":
+            x, y = 10000 / x, 10000 / y
+        elif props["tiff.ResolutionUnit"].lower() == "inch":
+            x, y = 25400 / x, 25400 / y
+    if x is None or y is None:
+        raise ValueError("Slide does not have MPP information")
+    return x, y

@@ -70,7 +70,7 @@ from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.grandqc.wsi_tissue_detection import detect_tissue_wsi
 from classpose.model_configs import DEFAULT_MODEL_CONFIGS, ModelConfig
 from classpose.models import ClassposeModel
-from classpose.utils import get_device
+from classpose.utils import get_device, get_slide_resolution
 from classpose.entrypoints.outputs import (
     calculate_cellular_densities,
     create_spatialdata_output,
@@ -149,10 +149,7 @@ class SlideLoader:
 
     def _init_slide(self):
         self.slide = OpenSlide(self.slide_path)
-        self.mpp = (
-            float(self.slide.properties["openslide.mpp-x"]),
-            float(self.slide.properties["openslide.mpp-y"]),
-        )
+        self.mpp = get_slide_resolution(self.slide)
         self.mpp_x.value = self.mpp[0]
         self.mpp_y.value = self.mpp[1]
         target_downsample = min(
@@ -172,7 +169,7 @@ class SlideLoader:
                 self._get_coords(
                     self.tile_size, self.overlap, self.slide_dim, self.ts.value
                 )
-            )[0:1000]
+            )
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
         logger.info(f"Tile size: {self.tile_size}")
@@ -415,6 +412,7 @@ class PostProcessor:
             masks, class_masks = datum
             u = np.unique(masks)
             u = u[u > 0]
+            curr_cells = []
             for i in u:
                 cell_mask = masks == i
                 curr_coords = (
@@ -438,37 +436,37 @@ class PostProcessor:
                 curr_coords = curr_coords.tolist()
                 curr_coords.append(curr_coords[0])
                 cl = class_masks[cell_mask][0]
-                self.polygons.put(
-                    {
-                        "type": "Feature",
-                        "id": str(uuid.uuid4()),
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [curr_coords],
+                curr_cell = {
+                    "type": "Feature",
+                    "id": str(uuid.uuid4()),
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [curr_coords],
+                    },
+                    "properties": {
+                        "objectType": "annotation",
+                        "isLocked": False,
+                        "classification": {
+                            "name": self.labels[int(cl) - 1],
+                            "color": COLORMAP[int(cl) - 1],
                         },
-                        "properties": {
-                            "objectType": "annotation",
-                            "isLocked": False,
-                            "classification": {
-                                "name": self.labels[int(cl) - 1],
-                                "color": COLORMAP[int(cl) - 1],
+                        "measurements": [
+                            {"name": "area", "value": polygon.area},
+                            {"name": "perimeter", "value": polygon.length},
+                            {
+                                "name": "centroidX",
+                                "value": int(center[0]),
                             },
-                            "measurements": [
-                                {"name": "area", "value": polygon.area},
-                                {"name": "perimeter", "value": polygon.length},
-                                {
-                                    "name": "centroidX",
-                                    "value": int(center[0]),
-                                },
-                                {
-                                    "name": "centroidY",
-                                    "value": int(center[1]),
-                                },
-                            ],
-                        },
-                    }
-                )
-                self.n_cells.value += 1
+                            {
+                                "name": "centroidY",
+                                "value": int(center[1]),
+                            },
+                        ],
+                    },
+                }
+                curr_cells.append(curr_cell)
+            self.polygons.put(curr_cells)
+            self.n_cells.value += len(curr_cells)
             self.value.value += 1
 
 
@@ -1167,8 +1165,10 @@ def main(args):
     slide.close()
 
     polygons = []
-    while not pp.polygons.empty():
-        polygons.append(pp.polygons.get())
+    with tqdm(desc="Collecting polygons") as pbar:
+        while not pp.polygons.empty():
+            polygons.extend(pp.polygons.get())
+            pbar.update()
     logger.info(f"Number of detected cells: {len(polygons)}")
     logger.info(f"Number of invalid cells: {pp.n_invalid_cells.value}")
     if len(polygons) == 0:
