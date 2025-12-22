@@ -199,7 +199,7 @@ def detect_tissue_wsi(
         if real_area >= min_area:
             filtered_mask[curr] = 1
         else:
-            grandqc_logger.warning(
+            grandqc_logger.debug(
                 "Invalid polygon detected: smaller than min area (%s)",
                 real_area,
             )

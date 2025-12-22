@@ -42,9 +42,7 @@ from pathlib import Path
 from multiprocessing.managers import SyncManager
 
 import cv2
-import geopandas as gpd
 import numpy as np
-import pandas as pd
 import shapely
 import torch
 import torch.multiprocessing as tmproc
@@ -54,18 +52,10 @@ from scipy.spatial import KDTree
 from skimage import color, measure
 from tqdm import tqdm
 
-from classpose.log import get_logger
-
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
 
-logger = get_logger("classpose")
-logger.setLevel(logging.INFO)
-
-for name in logging.root.manager.loggerDict:
-    if "cellpose" in name or "classpose" in name:
-        logging.getLogger(name).setLevel(logging.INFO)
-
+from classpose.log import get_logger
 from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.grandqc.wsi_tissue_detection import detect_tissue_wsi
 from classpose.model_configs import DEFAULT_MODEL_CONFIGS, ModelConfig
@@ -77,6 +67,9 @@ from classpose.entrypoints.outputs import (
     create_valid_polygon,
     map_cells_to_roi_classes,
 )
+
+logger = get_logger("classpose")
+
 
 DEFAULT_TRAIN_MPP = 0.5
 DEFAULT_TILE_SIZE = 1024
@@ -170,6 +163,7 @@ class SlideLoader:
                     self.tile_size, self.overlap, self.slide_dim, self.ts.value
                 )
             )
+        logger.info(f"Slide mpp: {self.mpp}")
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
         logger.info(f"Tile size: {self.tile_size}")
@@ -572,8 +566,9 @@ def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
     """
     centers = []
     sizes = []
-    logger.info("Beginning deduplication")
-    logger.info("Extracting centers")
+    logger.info("Deduplicating cells")
+    logger.debug("Beginning deduplication")
+    logger.debug("Extracting centers")
     for feature in features:
         measurements = feature["properties"]["measurements"]
         size = [x for x in measurements if x["name"] == "area"][0]["value"]
@@ -584,11 +579,11 @@ def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
         centers.append(center)
         sizes.append(size)
 
-    logger.info("Building KDTree")
+    logger.debug("Building KDTree")
     tree = KDTree(centers)
-    logger.info("KDTree built")
+    logger.debug("KDTree built")
 
-    logger.info("Finding neighbours")
+    logger.debug("Finding neighbours")
     neighbours = tree.query_pairs(max_dist)
 
     groups: dict[str, list] = {}
@@ -612,7 +607,7 @@ def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
         if pair[1] not in groups[group_idx]:
             groups[group_idx].append(pair[1])
 
-    logger.info("Removing based on size (keeping largest)")
+    logger.debug("Removing based on size (keeping largest)")
     to_remove = {}
     for k in groups:
         group = groups[k]
@@ -623,7 +618,7 @@ def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
                 if i != largest and i not in to_remove:
                     to_remove[i] = True
 
-    logger.info("Generating final list of features (cells)")
+    logger.debug("Generating final list of features (cells)")
     output = [features[i] for i in range(len(features)) if i not in to_remove]
     logger.info(f"Removed {len(to_remove)} duplicates.")
     logger.info(f"Number of cells: {len(output)}")
@@ -687,9 +682,11 @@ def shapely_polygon_to_geojson(
 
 def load_roi_polygons(
     roi_geojson_path: str, group_by_class: bool = False
-) -> shapely.STRtree | tuple[
-    shapely.STRtree, dict[str, list[shapely.Polygon]]
-] | None:
+) -> (
+    shapely.STRtree
+    | tuple[shapely.STRtree, dict[str, list[shapely.Polygon]]]
+    | None
+):
     """
     Load ROI polygons from a GeoJSON file (FeatureCollection).
 
@@ -849,8 +846,6 @@ def filter_cells_by_contours(
     Returns:
         list[dict]: Filtered list of polygons.
     """
-    keep = []
-
     valid_contours = []
     for contour in contours:
         if not contour.is_valid:
@@ -864,15 +859,10 @@ def filter_cells_by_contours(
         return polygons
 
     contour_tree = shapely.STRtree(valid_contours)
-    for i, cell_data in enumerate(tqdm(polygons, desc=desc)):
-        cell_centroid = shapely.Point(get_cell_centroid(cell_data))
-
-        try:
-            if len(contour_tree.query(cell_centroid, predicate="within")) > 0:
-                keep.append(i)
-        except Exception as e:
-            logger.warning(f"Error checking cell {i}: {e}")
-            continue
+    cell_centroids = [
+        shapely.Point(get_cell_centroid(cell)) for cell in polygons
+    ]
+    keep, _ = contour_tree.query(cell_centroids, predicate="within")
 
     return [polygons[i] for i in keep]
 
