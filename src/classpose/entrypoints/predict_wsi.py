@@ -172,7 +172,7 @@ class SlideLoader:
                 self._get_coords(
                     self.tile_size, self.overlap, self.slide_dim, self.ts.value
                 )
-            )
+            )[0:1000]
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
         logger.info(f"Tile size: {self.tile_size}")
@@ -368,7 +368,7 @@ class PostProcessor:
             manager = tmproc.Manager()
 
         self.n = manager.Value("i", 0)
-        self.polygons = manager.list()
+        self.polygons = manager.Queue()
         self.value = manager.Value("i", 0)
         self.n_cells = manager.Value("i", 0)
         self.n_invalid_cells = manager.Value("i", 0)
@@ -438,7 +438,7 @@ class PostProcessor:
                 curr_coords = curr_coords.tolist()
                 curr_coords.append(curr_coords[0])
                 cl = class_masks[cell_mask][0]
-                self.polygons.append(
+                self.polygons.put(
                     {
                         "type": "Feature",
                         "id": str(uuid.uuid4()),
@@ -1166,15 +1166,18 @@ def main(args):
     pp.p.join()
     slide.close()
 
-    logger.info(f"Number of detected cells: {len(pp.polygons)}")
+    polygons = []
+    while not pp.polygons.empty():
+        polygons.append(pp.polygons.get())
+    logger.info(f"Number of detected cells: {len(polygons)}")
     logger.info(f"Number of invalid cells: {pp.n_invalid_cells.value}")
-    if len(pp.polygons) == 0:
+    if len(polygons) == 0:
         logger.warning("No cells detected")
         logger.info("Exiting")
         return
 
     logger.info("Creating GeoJSON file")
-    polygons = deduplicate(list(pp.polygons))
+    polygons = deduplicate(list(polygons))
 
     output_folder = Path(args.output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
