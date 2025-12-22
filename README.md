@@ -166,7 +166,7 @@ The companion QuPath extension lives in `qupath-extension-classpose/` and makes 
 
 Build and installation instructions are in [`qupath-extension-classpose`](./qupath-extension-classpose).
 
-https://github.com/user-attachments/assets/81c87b43-be17-4401-8a7e-947389ce990a
+https://github.com/user-attachments/assets/1a49a140-e6fe-4e3e-9c8f-49d0ed785ed3
 
 ## Citation
 
