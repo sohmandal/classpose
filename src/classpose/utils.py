@@ -428,26 +428,36 @@ def get_slide_resolution(openslide_slide: OpenSlide) -> tuple[float, float]:
     x, y = None, None
     if "openslide.mpp-x" in props and "openslide.mpp-y" in props:
         x, y = float(props["openslide.mpp-x"]), float(props["openslide.mpp-y"])
-        utils_logger.info("Slide resolution extracted from openslide.mpp")
+        utils_logger.debug("Slide resolution extracted from openslide.mpp")
     elif "tiff.XResolution" in props and "tiff.YResolution" in props:
         x, y = float(props["tiff.XResolution"]), float(
             props["tiff.YResolution"]
         )
-        utils_logger.info(
+        utils_logger.debug(
             "Slide resolution extracted from tiff.XResolution and tiff.YResolution"
         )
-        if props["tiff.ResolutionUnit"].lower() == "centimenter":
+        if props["tiff.ResolutionUnit"].lower() == "centimeter":
             x, y = 10000 / x, 10000 / y
-            utils_logger.info(
+            utils_logger.debug(
                 "Slide resolution converted from centimeters to microns"
             )
         elif props["tiff.ResolutionUnit"].lower() == "inch":
             x, y = 25400 / x, 25400 / y
-            utils_logger.info(
+            utils_logger.debug(
                 "Slide resolution converted from inches to microns"
             )
+        else:
+            utils_logger.error(
+                "Slide resolution unit not recognized: %s",
+                props["tiff.ResolutionUnit"],
+            )
+            raise ValueError(
+                "Slide resolution unit not recognized: {}".format(
+                    props["tiff.ResolutionUnit"]
+                )
+            )
     if x is None or y is None:
-        utils_logger.warning("Slide does not have MPP information")
+        utils_logger.error("Slide does not have MPP information")
         raise ValueError("Slide does not have MPP information")
-    utils_logger.info("Slide resolution: %s", (x, y))
+    utils_logger.debug("Slide resolution: %s", (x, y))
     return x, y
