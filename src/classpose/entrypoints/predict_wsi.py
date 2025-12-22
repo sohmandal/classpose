@@ -425,7 +425,7 @@ class PostProcessor:
                     )[0][0][:, 0]
                     * ts
                     + coords
-                )
+                ).astype(int)
                 # discard invalid polygons as these cannot be read in QuPath
                 if curr_coords.shape[0] < 4:
                     self.n_invalid_cells.value += 1
@@ -434,7 +434,7 @@ class PostProcessor:
                 if not polygon.is_valid:
                     self.n_invalid_cells.value += 1
                     continue
-                center = polygon.centroid.coords[0]
+                center = np.round(polygon.centroid.coords[0])
                 curr_coords = curr_coords.tolist()
                 curr_coords.append(curr_coords[0])
                 cl = class_masks[cell_mask][0]
@@ -458,11 +458,11 @@ class PostProcessor:
                                 {"name": "perimeter", "value": polygon.length},
                                 {
                                     "name": "centroidX",
-                                    "value": center[0],
+                                    "value": int(center[0]),
                                 },
                                 {
                                     "name": "centroidY",
-                                    "value": center[1],
+                                    "value": int(center[1]),
                                 },
                             ],
                         },
@@ -812,6 +812,29 @@ def get_artefact_class_id(class_name: str) -> int:
     return mapping.get(class_name, 0)  # Return 0 for unknown classes
 
 
+def get_cell_centroid(cell: dict) -> list[int]:
+    """
+    Extract the centroid coordinates from a cell feature.
+
+    Args:
+        cell (dict): Cell feature containing measurements.
+
+    Returns:
+        list[int]: List containing [x, y] centroid coordinates.
+    """
+    centroid_x = [
+        x
+        for x in cell["properties"]["measurements"]
+        if x["name"] == "centroidX"
+    ][0]["value"]
+    centroid_y = [
+        x
+        for x in cell["properties"]["measurements"]
+        if x["name"] == "centroidY"
+    ][0]["value"]
+    return [centroid_x, centroid_y]
+
+
 def filter_cells_by_contours(
     polygons: list[dict],
     contours: list[shapely.Polygon],
@@ -844,15 +867,10 @@ def filter_cells_by_contours(
 
     contour_tree = shapely.STRtree(valid_contours)
     for i, cell_data in enumerate(tqdm(polygons, desc=desc)):
-        cell_polygon = create_valid_polygon(
-            cell_data["geometry"]["coordinates"][0], polygon_index=i
-        )
-
-        if cell_polygon is None:
-            continue
+        cell_centroid = shapely.Point(get_cell_centroid(cell_data))
 
         try:
-            if len(contour_tree.query(cell_polygon, predicate="within")) > 0:
+            if len(contour_tree.query(cell_centroid, predicate="within")) > 0:
                 keep.append(i)
         except Exception as e:
             logger.warning(f"Error checking cell {i}: {e}")
@@ -896,19 +914,13 @@ def filter_cells_by_artefacts(
     for i, cell_data in enumerate(
         tqdm(cells, desc="Filtering cells by artefacts")
     ):
-        cell_polygon = create_valid_polygon(
-            cell_data["geometry"]["coordinates"][0], polygon_index=i
-        )
-
-        if cell_polygon is None:
-            cells_in_artefacts_indices.add(i)  # Remove invalid polygons
-            continue
+        cell_centroid = shapely.Point(get_cell_centroid(cell_data))
 
         try:
-            if len(artefact_tree.query(cell_polygon, predicate="within")) > 0:
+            if len(artefact_tree.query(cell_centroid, predicate="within")) > 0:
                 cells_in_artefacts_indices.add(i)
         except Exception as e:
-            logger.warning(f"Error checking containment for cell {i}: {e}")
+            logger.warning(f"Error checking cell {i}: {e}")
             continue
 
     # Keep cells that are not in artefacts
