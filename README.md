@@ -170,7 +170,7 @@ https://github.com/user-attachments/assets/81c87b43-be17-4401-8a7e-947389ce990a
 
 ## Citation
 
-Mandal, Soham*, José Guilherme de Almeida*, Nickolas Papanikolaou, and Trevor A. Graham. *“Classpose: Foundation Model-Driven Whole Slide Image-Scale Cell Phenotyping in H&E.”* bioRxiv. bioRxiv, December 22, 2025. https://doi.org/10.64898/2025.12.18.695211.
+Soham Mandal*, José Guilherme de Almeida*, Nickolas Papanikolaou, and Trevor A. Graham. *“Classpose: Foundation Model-Driven Whole Slide Image-Scale Cell Phenotyping in H&E.”* bioRxiv. bioRxiv, December 22, 2025. https://doi.org/10.64898/2025.12.18.695211.
 
 *joint first authors
 
