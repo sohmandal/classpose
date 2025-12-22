@@ -1,0 +1,66 @@
+[project]
+name = "classpose"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "bokeh>=3.7.2",
+    "cellpose>=3.1.1.1",
+    "dask>=2024.4.1,<=2024.11.2",
+    "dask-image>=2024.5.3",
+    "dask-jobqueue>=0.9.0",
+    "distributed>=2024.4.1,<=2024.11.2",
+    "fastremap>=1.15.1",
+    "google-cloud-storage>=3.1.0",
+    "huggingface-hub>=0.35.3",
+    "isort>=7.0.0",
+    "matplotlib>=3.10.3",
+    "natsort>=8.4.0",
+    "numba>=0.61.2",
+    "numpy>=2.0.2",
+    "opencv-python-headless>=4.11.0.86",
+    "openslide-python>=1.4.2",
+    "pre-commit>=4.3.0",
+    "pydantic>=2.11.9",
+    "pyqt5>=5.15.11",
+    "pyqtgraph>=0.13.7",
+    "pyyaml>=6.0.2",
+    "qtpy>=2.4.3",
+    "roifile>=2025.2.20",
+    "ruff>=0.14.0",
+    "scikit-image>=0.25.2",
+    "scikit-learn>=1.6.1",
+    "scipy>=1.15.2",
+    "segmentation-models-pytorch>=0.3.0",
+    "shapely>=2.1.1",
+    "spatialdata[extra]>=0.5.0",
+    "tifffile>=2025.3.30",
+    "timm>=0.4.0, <0.5",
+    "torch>=2.6.0",
+    "torchvision>=0.22.0",
+    "tqdm>=4.67.1",
+    "zarr<3",
+]
+
+[project.optional-dependencies]
+notebook = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.1",
+    "notebook>=7.4.0",
+]
+
+[tool.uv.sources]
+cellpose = { git = "https://github.com/MouseLand/cellpose" }
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["classpose"]
+
+[project.scripts]
+classpose-predict-wsi = "classpose.entrypoints.predict_wsi:main_with_args"
+classpose-calculate-metrics = "classpose.entrypoints.calculate_metrics:main_with_args"
