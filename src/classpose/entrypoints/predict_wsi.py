@@ -831,9 +831,7 @@ def get_cell_centroid(cell: dict) -> list[int]:
 
 
 def filter_cells_by_contours(
-    polygons: list[dict],
-    contours: list[shapely.Polygon],
-    desc: str = "Filtering cells",
+    polygons: list[dict], contours: list[shapely.Polygon]
 ) -> list[dict]:
     """
     Filter cells based on containment within given contours.
@@ -841,7 +839,6 @@ def filter_cells_by_contours(
     Args:
         polygons (list[dict]): List of cell polygons in GeoJSON format.
         contours (list[shapely.Polygon]): List of contour polygons to filter against.
-        desc (str): Description for progress bar.
 
     Returns:
         list[dict]: Filtered list of polygons.
