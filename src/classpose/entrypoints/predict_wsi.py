@@ -807,7 +807,7 @@ def get_artefact_class_id(class_name: str) -> int:
     return mapping.get(class_name, 0)  # Return 0 for unknown classes
 
 
-def get_cell_centroid(cell: dict) -> list[int]:
+def get_cell_centroid(cell: dict) -> list[float]:
     """
     Extract the centroid coordinates from a cell feature.
 
@@ -815,7 +815,7 @@ def get_cell_centroid(cell: dict) -> list[int]:
         cell (dict): Cell feature containing measurements.
 
     Returns:
-        list[int]: List containing [x, y] centroid coordinates.
+        list[float]: List containing [x, y] centroid coordinates.
     """
     centroid_x = [
         x
