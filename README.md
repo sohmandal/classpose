@@ -174,7 +174,7 @@ Soham Mandal*, José Guilherme de Almeida*, Nickolas Papanikolaou, and Trevor A.
 
 *joint first authors
 
-If you use this project in academic work, please cite Cellpose and this repository.
+If you use this project in your work, please cite Cellpose and Classpose.
 ```bibtex
 @article {Mandal2025.12.18.695211,
 	author = {Mandal, Soham and de Almeida, Jos{\'e} Guilherme and Papanikolaou, Nickolas and Graham, Trevor A},
