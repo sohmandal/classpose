@@ -1178,17 +1178,13 @@ def main(args):
     if args.roi_geojson:
         logger.info("Filtering cells based on ROI contours")
         roi_cnts = list(slide.roi_cnts)
-        polygons = filter_cells_by_contours(
-            polygons, roi_cnts, "Filtering cells by ROI"
-        )
+        polygons = filter_cells_by_contours(polygons, roi_cnts)
         logger.info(f"Number of cells after filtering: {len(polygons)}")
 
     if args.tissue_detection_model_path is not None:
         logger.info("Filtering cells based on tissue contours")
         tissue_cnts = list(slide.tissue_cnts)
-        polygons = filter_cells_by_contours(
-            polygons, tissue_cnts, "Filtering cells by tissue"
-        )
+        polygons = filter_cells_by_contours(polygons, tissue_cnts)
         tissue_features = []
         for i, cnt in enumerate(tissue_cnts):
             tissue_features.extend(
