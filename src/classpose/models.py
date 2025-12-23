@@ -285,7 +285,7 @@ class ClassposeModel(CellposeModel):
         self.nclasses = nclasses
 
         if os.path.exists(self.pretrained_model):
-            models_logger.info(f">>>> loading model {self.pretrained_model}")
+            models_logger.info(f"loading model {self.pretrained_model}")
             self.net.load_model(self.pretrained_model, device=self.device)
         else:
             if os.path.split(self.pretrained_model)[-1] != "cpsam":

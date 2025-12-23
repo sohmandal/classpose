@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from PIL import Image
+from classpose.utils import get_slide_resolution
 
 
 def simulate_jpeg_compression(image: Image.Image) -> Image.Image:
@@ -36,7 +37,7 @@ def extract_slide_info(
         tuple: (w_l0, h_l0, mpp, thumbnail_dimensions)
     """
     w_l0, h_l0 = slide.level_dimensions[0]
-    mpp = round(float(slide.properties["openslide.mpp-x"]), 4)
+    mpp = get_slide_resolution(slide)[0]
     reduction_factor = mpp_model / mpp
     thumbnail_dimensions = (
         int(w_l0 // reduction_factor),

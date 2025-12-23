@@ -1,4 +1,5 @@
 import logging
+import os
 
 formatter = logging.Formatter(
     fmt="%(asctime)s,%(msecs)03d %(name)s %(levelname)s %(message)s",
@@ -17,14 +18,17 @@ def get_logger(log_name: str):
         logging.Logger: The logger.
     """
     logger = logging.getLogger(log_name)
-    logger.setLevel(logging.INFO)
+    logging_level = os.environ.get("LOG_LEVEL", "INFO")
+    logger.setLevel(logging_level)
+    logger.propagate = False
 
-    if not logger.hasHandlers():
+    has_stream_handler = any(
+        type(h) is logging.StreamHandler for h in logger.handlers
+    )
+    if not has_stream_handler:
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         logger.addHandler(stream_handler)
-
-    logger.propagate = False
 
     return logger
 

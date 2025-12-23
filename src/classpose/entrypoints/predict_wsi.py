@@ -42,9 +42,7 @@ from pathlib import Path
 from multiprocessing.managers import SyncManager
 
 import cv2
-import geopandas as gpd
 import numpy as np
-import pandas as pd
 import shapely
 import torch
 import torch.multiprocessing as tmproc
@@ -54,29 +52,24 @@ from scipy.spatial import KDTree
 from skimage import color, measure
 from tqdm import tqdm
 
-from classpose.log import get_logger
-
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
 
-logger = get_logger("classpose")
-logger.setLevel(logging.INFO)
-
-for name in logging.root.manager.loggerDict:
-    if "cellpose" in name or "classpose" in name:
-        logging.getLogger(name).setLevel(logging.INFO)
-
+from classpose.log import get_logger
 from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.grandqc.wsi_tissue_detection import detect_tissue_wsi
 from classpose.model_configs import DEFAULT_MODEL_CONFIGS, ModelConfig
 from classpose.models import ClassposeModel
-from classpose.utils import get_device
+from classpose.utils import get_device, get_slide_resolution
 from classpose.entrypoints.outputs import (
     calculate_cellular_densities,
     create_spatialdata_output,
     create_valid_polygon,
     map_cells_to_roi_classes,
 )
+
+logger = get_logger("classpose")
+
 
 DEFAULT_TRAIN_MPP = 0.5
 DEFAULT_TILE_SIZE = 1024
@@ -149,10 +142,7 @@ class SlideLoader:
 
     def _init_slide(self):
         self.slide = OpenSlide(self.slide_path)
-        self.mpp = (
-            float(self.slide.properties["openslide.mpp-x"]),
-            float(self.slide.properties["openslide.mpp-y"]),
-        )
+        self.mpp = get_slide_resolution(self.slide)
         self.mpp_x.value = self.mpp[0]
         self.mpp_y.value = self.mpp[1]
         target_downsample = min(
@@ -173,6 +163,7 @@ class SlideLoader:
                     self.tile_size, self.overlap, self.slide_dim, self.ts.value
                 )
             )
+        logger.info(f"Slide mpp: {self.mpp}")
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
         logger.info(f"Tile size: {self.tile_size}")
@@ -368,7 +359,7 @@ class PostProcessor:
             manager = tmproc.Manager()
 
         self.n = manager.Value("i", 0)
-        self.polygons = manager.list()
+        self.polygons = manager.Queue()
         self.value = manager.Value("i", 0)
         self.n_cells = manager.Value("i", 0)
         self.n_invalid_cells = manager.Value("i", 0)
@@ -415,6 +406,7 @@ class PostProcessor:
             masks, class_masks = datum
             u = np.unique(masks)
             u = u[u > 0]
+            curr_cells = []
             for i in u:
                 cell_mask = masks == i
                 curr_coords = (
@@ -434,41 +426,41 @@ class PostProcessor:
                 if not polygon.is_valid:
                     self.n_invalid_cells.value += 1
                     continue
-                center = polygon.centroid.coords[0]
+                center = np.round(polygon.centroid.coords[0], 2).tolist()
                 curr_coords = curr_coords.tolist()
                 curr_coords.append(curr_coords[0])
                 cl = class_masks[cell_mask][0]
-                self.polygons.append(
-                    {
-                        "type": "Feature",
-                        "id": str(uuid.uuid4()),
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [curr_coords],
+                curr_cell = {
+                    "type": "Feature",
+                    "id": str(uuid.uuid4()),
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [curr_coords],
+                    },
+                    "properties": {
+                        "objectType": "annotation",
+                        "isLocked": False,
+                        "classification": {
+                            "name": self.labels[int(cl) - 1],
+                            "color": COLORMAP[int(cl) - 1],
                         },
-                        "properties": {
-                            "objectType": "annotation",
-                            "isLocked": False,
-                            "classification": {
-                                "name": self.labels[int(cl) - 1],
-                                "color": COLORMAP[int(cl) - 1],
+                        "measurements": [
+                            {"name": "area", "value": polygon.area},
+                            {"name": "perimeter", "value": polygon.length},
+                            {
+                                "name": "centroidX",
+                                "value": center[0],
                             },
-                            "measurements": [
-                                {"name": "area", "value": polygon.area},
-                                {"name": "perimeter", "value": polygon.length},
-                                {
-                                    "name": "centroidX",
-                                    "value": center[0],
-                                },
-                                {
-                                    "name": "centroidY",
-                                    "value": center[1],
-                                },
-                            ],
-                        },
-                    }
-                )
-                self.n_cells.value += 1
+                            {
+                                "name": "centroidY",
+                                "value": center[1],
+                            },
+                        ],
+                    },
+                }
+                curr_cells.append(curr_cell)
+            self.polygons.put(curr_cells)
+            self.n_cells.value += len(curr_cells)
             self.value.value += 1
 
 
@@ -574,8 +566,9 @@ def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
     """
     centers = []
     sizes = []
-    logger.info("Beginning deduplication")
-    logger.info("Extracting centers")
+    logger.info("Deduplicating cells")
+    logger.debug("Beginning deduplication")
+    logger.debug("Extracting centers")
     for feature in features:
         measurements = feature["properties"]["measurements"]
         size = [x for x in measurements if x["name"] == "area"][0]["value"]
@@ -586,11 +579,11 @@ def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
         centers.append(center)
         sizes.append(size)
 
-    logger.info("Building KDTree")
+    logger.debug("Building KDTree")
     tree = KDTree(centers)
-    logger.info("KDTree built")
+    logger.debug("KDTree built")
 
-    logger.info("Finding neighbours")
+    logger.debug("Finding neighbours")
     neighbours = tree.query_pairs(max_dist)
 
     groups: dict[str, list] = {}
@@ -614,7 +607,7 @@ def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
         if pair[1] not in groups[group_idx]:
             groups[group_idx].append(pair[1])
 
-    logger.info("Removing based on size (keeping largest)")
+    logger.debug("Removing based on size (keeping largest)")
     to_remove = {}
     for k in groups:
         group = groups[k]
@@ -625,7 +618,7 @@ def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
                 if i != largest and i not in to_remove:
                     to_remove[i] = True
 
-    logger.info("Generating final list of features (cells)")
+    logger.debug("Generating final list of features (cells)")
     output = [features[i] for i in range(len(features)) if i not in to_remove]
     logger.info(f"Removed {len(to_remove)} duplicates.")
     logger.info(f"Number of cells: {len(output)}")
@@ -689,9 +682,11 @@ def shapely_polygon_to_geojson(
 
 def load_roi_polygons(
     roi_geojson_path: str, group_by_class: bool = False
-) -> shapely.STRtree | tuple[
-    shapely.STRtree, dict[str, list[shapely.Polygon]]
-] | None:
+) -> (
+    shapely.STRtree
+    | tuple[shapely.STRtree, dict[str, list[shapely.Polygon]]]
+    | None
+):
     """
     Load ROI polygons from a GeoJSON file (FeatureCollection).
 
@@ -812,10 +807,31 @@ def get_artefact_class_id(class_name: str) -> int:
     return mapping.get(class_name, 0)  # Return 0 for unknown classes
 
 
+def get_cell_centroid(cell: dict) -> list[float]:
+    """
+    Extract the centroid coordinates from a cell feature.
+
+    Args:
+        cell (dict): Cell feature containing measurements.
+
+    Returns:
+        list[float]: List containing [x, y] centroid coordinates.
+    """
+    centroid_x = [
+        x
+        for x in cell["properties"]["measurements"]
+        if x["name"] == "centroidX"
+    ][0]["value"]
+    centroid_y = [
+        x
+        for x in cell["properties"]["measurements"]
+        if x["name"] == "centroidY"
+    ][0]["value"]
+    return [centroid_x, centroid_y]
+
+
 def filter_cells_by_contours(
-    polygons: list[dict],
-    contours: list[shapely.Polygon],
-    desc: str = "Filtering cells",
+    polygons: list[dict], contours: list[shapely.Polygon]
 ) -> list[dict]:
     """
     Filter cells based on containment within given contours.
@@ -823,13 +839,10 @@ def filter_cells_by_contours(
     Args:
         polygons (list[dict]): List of cell polygons in GeoJSON format.
         contours (list[shapely.Polygon]): List of contour polygons to filter against.
-        desc (str): Description for progress bar.
 
     Returns:
         list[dict]: Filtered list of polygons.
     """
-    keep = []
-
     valid_contours = []
     for contour in contours:
         if not contour.is_valid:
@@ -843,20 +856,10 @@ def filter_cells_by_contours(
         return polygons
 
     contour_tree = shapely.STRtree(valid_contours)
-    for i, cell_data in enumerate(tqdm(polygons, desc=desc)):
-        cell_polygon = create_valid_polygon(
-            cell_data["geometry"]["coordinates"][0], polygon_index=i
-        )
-
-        if cell_polygon is None:
-            continue
-
-        try:
-            if len(contour_tree.query(cell_polygon, predicate="within")) > 0:
-                keep.append(i)
-        except Exception as e:
-            logger.warning(f"Error checking cell {i}: {e}")
-            continue
+    cell_centroids = [
+        shapely.Point(get_cell_centroid(cell)) for cell in polygons
+    ]
+    keep, _ = contour_tree.query(cell_centroids, predicate="within")
 
     return [polygons[i] for i in keep]
 
@@ -896,19 +899,13 @@ def filter_cells_by_artefacts(
     for i, cell_data in enumerate(
         tqdm(cells, desc="Filtering cells by artefacts")
     ):
-        cell_polygon = create_valid_polygon(
-            cell_data["geometry"]["coordinates"][0], polygon_index=i
-        )
-
-        if cell_polygon is None:
-            cells_in_artefacts_indices.add(i)  # Remove invalid polygons
-            continue
+        cell_centroid = shapely.Point(get_cell_centroid(cell_data))
 
         try:
-            if len(artefact_tree.query(cell_polygon, predicate="within")) > 0:
+            if len(artefact_tree.query(cell_centroid, predicate="within")) > 0:
                 cells_in_artefacts_indices.add(i)
         except Exception as e:
-            logger.warning(f"Error checking containment for cell {i}: {e}")
+            logger.warning(f"Error checking cell {i}: {e}")
             continue
 
     # Keep cells that are not in artefacts
@@ -1154,15 +1151,20 @@ def main(args):
     pp.p.join()
     slide.close()
 
-    logger.info(f"Number of detected cells: {len(pp.polygons)}")
+    polygons = []
+    with tqdm(desc="Collecting polygons") as pbar:
+        while not pp.polygons.empty():
+            polygons.extend(pp.polygons.get())
+            pbar.update()
+    logger.info(f"Number of detected cells: {len(polygons)}")
     logger.info(f"Number of invalid cells: {pp.n_invalid_cells.value}")
-    if len(pp.polygons) == 0:
+    if len(polygons) == 0:
         logger.warning("No cells detected")
         logger.info("Exiting")
         return
 
     logger.info("Creating GeoJSON file")
-    polygons = deduplicate(list(pp.polygons))
+    polygons = deduplicate(list(polygons))
 
     output_folder = Path(args.output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
