@@ -417,7 +417,7 @@ class PostProcessor:
                     )[0][0][:, 0]
                     * ts
                     + coords
-                ).astype(int)
+                )
                 # discard invalid polygons as these cannot be read in QuPath
                 if curr_coords.shape[0] < 4:
                     self.n_invalid_cells.value += 1
@@ -426,7 +426,7 @@ class PostProcessor:
                 if not polygon.is_valid:
                     self.n_invalid_cells.value += 1
                     continue
-                center = np.round(polygon.centroid.coords[0])
+                center = np.round(polygon.centroid.coords[0], 2).tolist()
                 curr_coords = curr_coords.tolist()
                 curr_coords.append(curr_coords[0])
                 cl = class_masks[cell_mask][0]
@@ -449,11 +449,11 @@ class PostProcessor:
                             {"name": "perimeter", "value": polygon.length},
                             {
                                 "name": "centroidX",
-                                "value": int(center[0]),
+                                "value": center[0],
                             },
                             {
                                 "name": "centroidY",
-                                "value": int(center[1]),
+                                "value": center[1],
                             },
                         ],
                     },
