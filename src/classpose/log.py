@@ -1,6 +1,8 @@
 import logging
 import os
+from pathlib import Path
 
+CLASSPOSE_LOG_PATH = os.environ.get("CLASSPOSE_LOG_PATH", None)
 formatter = logging.Formatter(
     fmt="%(asctime)s,%(msecs)03d %(name)s %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
@@ -29,6 +31,10 @@ def get_logger(log_name: str):
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         logger.addHandler(stream_handler)
+
+    if CLASSPOSE_LOG_PATH:
+        Path(CLASSPOSE_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
+        add_file_handler(logger, CLASSPOSE_LOG_PATH)
 
     return logger
 
