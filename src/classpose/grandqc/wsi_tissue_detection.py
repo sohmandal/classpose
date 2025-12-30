@@ -38,10 +38,10 @@ def detect_tissue_wsi(
 ) -> tuple[Image, np.ndarray, np.ndarray, list[np.ndarray], dict[str, Any],]:
     """
     Detects tissue in a whole-slide image using a U-Net model. This is adapted
-    from the GrandQC repository [1]. More details on the method in [2].
-
-    [1] https://github.com/cpath-ukk/grandqc/tree/main
-    [2] https://www.nature.com/articles/s41467-024-54769-y
+    from the GrandQC repository. Please note that if you use any part of Classpose 
+    which makes use of GrandQC please follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main 
+    to cite them appropriately. Similarly to Classpose, GrandQC is under a non-commercial license 
+    whose terms can be found at https://github.com/cpath-ukk/grandqc/blob/main/LICENSE.
 
     Args:
         slide (OpenSlide): slide to detect tissue in.

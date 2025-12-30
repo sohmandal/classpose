@@ -16,12 +16,17 @@ The workflow is as follows:
     each other and keeping the largest one (heuristic: if a cell prediction happens
     at the edge of an image, it is likely to be smaller)
 5. Optional tissue detection using GrandQC to identify tissue regions.
-6. Optional artefact detection to filter out cells in artefact regions.
+6. Optional artefact detection using GrandQC to filter out cells in artefact regions.
 7. Optional ROI-based filtering to restrict analysis to specific regions.
 8. Filter detected cells based on tissue and artefact contours.
 9. Generate outputs including cell contours and centroids as GeoJSON files,
     tissue contours, artefact contours, and optionally cellular densities as CSV
     and/or a unified SpatialData Zarr store.
+
+Please note that if you use any part of Classpose which makes use of GrandQC please 
+follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main to cite them 
+appropriately. Similarly to Classpose, GrandQC is under a non-commercial license 
+whose terms can be found at https://github.com/cpath-ukk/grandqc/blob/main/LICENSE.
 """
 
 import warnings
