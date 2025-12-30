@@ -9,7 +9,9 @@ Run Classpose whole-slide inference from QuPath and import the resulting annotat
 - Imports generated GeoJSONs (cells, centroids, tissue, artefacts) back into QuPath
 - Provides a live log window and a Cancel button while inference runs
 - Caches the Python executable path for convenience
-- Auto-resolves fixed GrandQC model locations next to the installed JAR
+- Auto-resolves fixed GrandQC model locations next to the installed JAR 
+
+N.B.: Please note that if you use any part of Classpose which makes use of GrandQC please follow the instructions at [here](https://github.com/cpath-ukk/grandqc/tree/main) to cite them appropriately. Similarly to Classpose, GrandQC is under a non-commercial license whose terms can be found at [here](https://github.com/cpath-ukk/grandqc/blob/main/LICENSE).
 
 ## Requirements
 

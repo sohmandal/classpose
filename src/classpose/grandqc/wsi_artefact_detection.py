@@ -66,6 +66,12 @@ def detect_artefacts_wsi(
     """
     Detects artefacts in a whole-slide image using GrandQC method.
     First performs tissue detection, then artefact segmentation on tissue areas.
+    
+    Please note that if you use any part of Classpose which makes use of GrandQC please 
+    follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main to cite them 
+    appropriately. Similarly to Classpose, GrandQC is under a non-commercial license 
+    whose terms can be found at https://github.com/cpath-ukk/grandqc/blob/main/LICENSE.
+
 
     Args:
         slide (OpenSlide): slide to detect artefacts in.

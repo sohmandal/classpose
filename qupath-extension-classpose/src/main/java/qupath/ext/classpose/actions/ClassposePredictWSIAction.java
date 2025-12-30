@@ -54,6 +54,11 @@ import java.util.prefs.Preferences;
 /**
  * Action to run Classpose predict-wsi.py on the current image and import results.
  *
+ * <p>If you use any part of Classpose which makes use of GrandQC please follow the instructions 
+ * at https://github.com/cpath-ukk/grandqc/tree/main to cite them appropriately. Similarly to 
+ * Classpose, GrandQC is under a non-commercial license whose terms can be found at 
+ * https://github.com/cpath-ukk/grandqc/blob/main/LICENSE.</p>
+ *
  * <p>Collects parameters via a dialog, runs the Python module
  * {@code classpose.entrypoints.predict_wsi}, streams logs live, and imports
  * any generated GeoJSONs back into the current hierarchy. Most UI options are

@@ -22,6 +22,11 @@ import java.util.prefs.Preferences;
 /**
  * Action to run GrandQC artefact detection on the current image and import results.
  *
+ * <p>If you use any part of Classpose which makes use of GrandQC please follow the instructions 
+ * at https://github.com/cpath-ukk/grandqc/tree/main to cite them appropriately. Similarly to 
+ * Classpose, GrandQC is under a non-commercial license whose terms can be found at 
+ * https://github.com/cpath-ukk/grandqc/blob/main/LICENSE.</p>
+ *
  * <p>Collects parameters via a dialog, runs {@code classpose.grandqc.wsi_artefact_detection},
  * streams logs live, and imports generated artefact GeoJSON. UI fields are cached across
  * sessions using {@link java.util.prefs.Preferences}.</p>
