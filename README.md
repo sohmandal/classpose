@@ -92,7 +92,7 @@ Optional arguments:
   `--artefact_detection_model_path` will download the corresponding GrandQC models to that
   path if they are not present. This makes use of the GrandQC models available in Zenodo
   ([tissue model](https://zenodo.org/records/14507273) and
-  [artefact model](https://zenodo.org/records/14041538)).
+  [artefact model](https://zenodo.org/records/14041538)). Please note that if you use any part of Classpose which makes use of GrandQC please follow the instructions at [here](https://github.com/cpath-ukk/grandqc/tree/main) to cite them appropriately. Similarly to Classpose, GrandQC is under a non-commercial license whose terms can be found at [here](https://github.com/cpath-ukk/grandqc/blob/main/LICENSE).
 - **Output types:** if you request `--output_type csv` or `--output_type spatialdata` (or
   both), `--tissue_detection_model_path` **must** be provided; otherwise the CLI will error.
 - **ROI-aware densities:** when `--roi_geojson` and `--output_type` include `csv` and/or
