@@ -160,6 +160,37 @@ cell_types:
   - "Cell Type 2"
 ```
 
+## Training
+
+Classpose supports custom model training with features like sparse annotation support, class weighting, and uncertainty-based loss balancing.
+
+**Basic example:**
+
+```python
+from classpose.models import ClassposeModel
+from classpose.train import train_class_seg
+
+# Initialize model
+model = ClassposeModel(gpu=True, pretrained_model="cpsam", nclasses=6)
+
+# Train (expects data as lists of numpy arrays with shape (C, H, W))
+# Labels should have 2 channels: [instances, class] where the last channel contains class labels
+# Optionally 4 channels: [instances, flow_y, flow_x, class] if flows are pre-computed
+train_class_seg(
+    net=model.net,
+    train_data=train_images,      # List of image arrays
+    train_labels=train_labels,    # List of label arrays 
+    test_data=test_images,        # Optional validation data
+    test_labels=test_labels,
+    n_epochs=100,
+    batch_size=4,
+    save_path="./models",
+    model_name="my_classpose_model"
+)
+```
+
+For a complete training example with data loading, oversampling, and advanced options, see [`paper_experiments/run_training.py`](./paper_experiments/run_training.py).
+
 ## QuPath extension
 
 The companion QuPath extension lives in `qupath-extension-classpose/` and makes Classpose directly accessible from QuPath with only a few configuration steps.
