@@ -639,23 +639,68 @@ class ClassposeModel(CellposeModel):
             torch.cuda.empty_cache()
             gc.collect()
 
-        if resample:
-            # upsample flows before computing them:
-            dP = self._resize_gradients(
-                dP, to_y_size=Ly_0, to_x_size=Lx_0, to_z_size=Lz_0
+            if resample:
+                # upsample flows before computing them:
+                dP = transforms.resize_image(
+                    dP.transpose(1, 2, 3, 0),
+                    Ly=Ly_0,
+                    Lx=Lx_0,
+                    no_channels=False,
+                )
+                dP = transforms.resize_image(
+                    dP.transpose(1, 0, 2, 3),
+                    Lx=Lx_0,
+                    Ly=Lz_0,
+                    no_channels=False,
+                )
+                dP = dP.transpose(3, 1, 0, 2)
+                cellprob = transforms.resize_image(
+                    cellprob, Ly=Ly_0, Lx=Lx_0, no_channels=True
+                )
+                cellprob = transforms.resize_image(
+                    cellprob.transpose(1, 0, 2),
+                    Lx=Lx_0,
+                    Ly=Lz_0,
+                    no_channels=True,
+                )
+                cellprob = cellprob.transpose(1, 0, 2)
+                # classes work here as gradients pretty much
+                y_class = transforms.resize_image(
+                    y_class.transpose(1, 2, 3, 0),
+                    Ly=Ly_0,
+                    Lx=Lx_0,
+                    no_channels=False,
+                )
+                y_class = transforms.resize_image(
+                    y_class.transpose(1, 0, 2, 3),
+                    Lx=Lx_0,
+                    Ly=Lz_0,
+                    no_channels=False,
+                )
+                y_class = y_class.transpose(3, 1, 0, 2)
+
+        if resample and not do_3D:
+            dP = transforms.resize_image(
+                dP.transpose(1, 2, 3, 0),
+                Ly=Ly_0,
+                Lx=Lx_0,
+                no_channels=False,
+            ).transpose(3, 0, 1, 2)
+            cellprob = transforms.resize_image(
+                cellprob, Ly=Ly_0, Lx=Lx_0, no_channels=True
             )
-            cellprob = self._resize_cellprob(
-                cellprob, to_x_size=Lx_0, to_y_size=Ly_0, to_z_size=Lz_0
-            )
-            y_class = self._resize_gradients(
-                y_class, to_x_size=Lx_0, to_y_size=Ly_0, to_z_size=Lz_0
-            )  # classes work here as gradients pretty much
+            y_class = transforms.resize_image(
+                y_class.transpose(1, 2, 3, 0),
+                Ly=Ly_0,
+                Lx=Lx_0,
+                no_channels=False,
+            ).transpose(3, 0, 1, 2)
 
         if compute_masks:
             niter0 = 200
             niter = niter0 if niter is None or niter == 0 else niter
             masks = self._compute_masks(
-                shape=x.shape,
+                shape=(Lz_0 or nimg, Ly_0, Lx_0),
                 dP=dP,
                 cellprob=cellprob,
                 flow_threshold=flow_threshold,
