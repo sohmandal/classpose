@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'darwin'",
@@ -274,12 +274,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/b9/33/032cdc44182491aa7
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ed/c9/d7977eaacb9df673210491da99e6a247e93df98c715fc43fd136ce1d3d33/arrow-1.4.0-py3-none-any.whl", hash = "sha256:749f0769958ebdc79c173ff0b0670d59051a535fa26e8eba02953dc19eb43205", size = 68797, upload-time = "2025-10-18T17:46:45.663Z" },
 ]
-
-[[package]]
-name = "asciitree"
-version = "0.3.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2d/6a/885bc91484e1aa8f618f6f0228d76d0e67000b0fdd6090673b777e311913/asciitree-0.3.3.tar.gz", hash = "sha256:4aa4b9b649f85e3fcb343363d97564aa1fb62e249677f2e18a96765145cc0f6e", size = 3951, upload-time = "2016-09-05T19:10:42.681Z" }
 
 [[package]]
 name = "asttokens"
@@ -625,13 +619,13 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.15.2" },
     { name = "segmentation-models-pytorch", specifier = ">=0.3.0" },
     { name = "shapely", specifier = ">=2.1.1" },
-    { name = "spatialdata", extras = ["extra"], specifier = ">=0.5.0" },
+    { name = "spatialdata", extras = ["extra"], specifier = ">=0.6.1" },
     { name = "tifffile", specifier = ">=2025.3.30" },
     { name = "timm", specifier = ">=0.4.0,<0.5" },
     { name = "torch", specifier = ">=2.6.0" },
     { name = "torchvision", specifier = ">=0.22.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "zarr", specifier = "<3" },
+    { name = "zarr", specifier = ">=3.1.5" },
 ]
 provides-extras = ["notebook"]
 
@@ -943,6 +937,18 @@ wheels = [
 ]
 
 [[package]]
+name = "donfig"
+version = "0.8.1.post1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/71/80cc718ff6d7abfbabacb1f57aaa42e9c1552bfdd01e64ddd704e4a03638/donfig-0.8.1.post1.tar.gz", hash = "sha256:3bef3413a4c1c601b585e8d297256d0c1470ea012afa6e8461dc28bfb7c23f52", size = 19506, upload-time = "2024-05-23T14:14:31.513Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/d5/c5db1ea3394c6e1732fb3286b3bd878b59507a8f77d32a2cebda7d7b7cd4/donfig-0.8.1.post1-py3-none-any.whl", hash = "sha256:2a3175ce74a06109ff9307d90a230f81215cbac9a751f4d1c6194644b8204f9d", size = 21592, upload-time = "2024-05-23T14:13:55.283Z" },
+]
+
+[[package]]
 name = "efficientnet-pytorch"
 version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -958,15 +964,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cc/28/c14e053b6762b1044f34a13aab6859bbf40456d37d23aa286ac24cfd9a5d/executing-2.2.1.tar.gz", hash = "sha256:3632cc370565f6648cc328b32435bd120a1e4ebb20c77e3fdde9a13cd1e533c4", size = 1129488, upload-time = "2025-09-01T09:48:10.866Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/ea/53f2148663b321f21b5a606bd5f191517cf40b7072c0497d3c92c4a13b1e/executing-2.2.1-py2.py3-none-any.whl", hash = "sha256:760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017", size = 28317, upload-time = "2025-09-01T09:48:08.5Z" },
-]
-
-[[package]]
-name = "fasteners"
-version = "0.20"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2d/18/7881a99ba5244bfc82f06017316ffe93217dbbbcfa52b887caa1d4f2a6d3/fasteners-0.20.tar.gz", hash = "sha256:55dce8792a41b56f727ba6e123fcaee77fd87e638a6863cec00007bfea84c8d8", size = 25087, upload-time = "2025-08-11T10:19:37.785Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/ac/e5d886f892666d2d1e5cb8c1a41146e1d79ae8896477b1153a21711d3b44/fasteners-0.20-py3-none-any.whl", hash = "sha256:9422c40d1e350e4259f509fb2e608d6bc43c0136f79a00db1b49046029d0b3b7", size = 18702, upload-time = "2025-08-11T10:19:35.716Z" },
 ]
 
 [[package]]
@@ -1207,6 +1204,9 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+http = [
+    { name = "aiohttp" },
+]
 s3 = [
     { name = "s3fs" },
 ]
@@ -2930,7 +2930,7 @@ wheels = [
 
 [[package]]
 name = "ome-zarr"
-version = "0.11.1"
+version = "0.12.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -2942,9 +2942,9 @@ dependencies = [
     { name = "toolz" },
     { name = "zarr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/43/25/0e7b247e3e864b93058e5af536407e943edca9f2002c93a9ac04064ff684/ome_zarr-0.11.1.tar.gz", hash = "sha256:f178e336412eaefdb74172b280095cd9bd497bfeb235c1b1c2b0965c21aa1af0", size = 65091, upload-time = "2025-04-23T08:44:40.089Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a4/44/647843d872aa136609e805c06e9f9b2cdcb6e2a58ec485322311dec7b64d/ome_zarr-0.12.2.tar.gz", hash = "sha256:834e801e9aa4b870bed3dde2dc2a3ad7f388f1a13ffa6b3d7aade90691b9de64", size = 69891, upload-time = "2025-08-22T08:57:13.64Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/24/c8/35ac60b20eccccf84638a872c3b4ebefad46b20f87540ca17a37908b1db6/ome_zarr-0.11.1-py3-none-any.whl", hash = "sha256:e8ffc93de78558be990ed3b1b2b186b97ca0c7eb2cb460a7cffb861f4f13a8f1", size = 40000, upload-time = "2025-04-23T08:44:39.077Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/21/59baa90924b815b70f88045f0b206b7eab0b68b461c0192692486b516ab7/ome_zarr-0.12.2-py3-none-any.whl", hash = "sha256:655fe1b11ca01148603f9931a5b0af31207dfc03a3a35f9b0ab8639790282bbd", size = 41410, upload-time = "2025-08-22T08:57:12.44Z" },
 ]
 
 [[package]]
@@ -3074,6 +3074,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b2/3a/3f06f34820a31257ddcabdfafc2672c5816be79c7e353b02c1f318daa7d4/partd-1.4.2.tar.gz", hash = "sha256:d022c33afbdc8405c226621b015e8067888173d85f7f5ecebb3cafed9a20f02c", size = 21029, upload-time = "2024-05-06T19:51:41.945Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/71/e7/40fb618334dcdf7c5a316c0e7343c5cd82d3d866edc100d98e29bc945ecd/partd-1.4.2-py3-none-any.whl", hash = "sha256:978e4ac767ec4ba5b86c6eaa52e5a2a3bc748a2ca839e8cc798f1cc6ce6efb0f", size = 18905, upload-time = "2024-05-06T19:51:39.271Z" },
+]
+
+[[package]]
+name = "pathlib-abc"
+version = "0.5.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/cb/448649d7f25d228bf0be3a04590ab7afa77f15e056f8fa976ed05ec9a78f/pathlib_abc-0.5.2.tar.gz", hash = "sha256:fcd56f147234645e2c59c7ae22808b34c364bb231f685ddd9f96885aed78a94c", size = 33342, upload-time = "2025-10-10T18:37:20.524Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/29/c028a0731e202035f0e2e0bfbf1a3e46ad6c628cbb17f6f1cc9eea5d9ff1/pathlib_abc-0.5.2-py3-none-any.whl", hash = "sha256:4c9d94cf1b23af417ce7c0417b43333b06a106c01000b286c99de230d95eefbb", size = 19070, upload-time = "2025-10-10T18:37:19.437Z" },
 ]
 
 [[package]]
@@ -3783,6 +3792,7 @@ resolution-markers = [
 wheels = [
     { url = "https://files.pythonhosted.org/packages/46/90/bf01ac2132400997a3474051dd680a583381ebf98b2f5d64d4e54138dc42/pyqt5_qt5-5.15.18-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:8bb997eb903afa9da3221a0c9e6eaa00413bbeb4394d5706118ad05375684767", size = 39715743, upload-time = "2025-11-09T12:56:42.936Z" },
     { url = "https://files.pythonhosted.org/packages/24/8e/76366484d9f9dbe28e3bdfc688183433a7b82e314216e9b14c89e5fab690/pyqt5_qt5-5.15.18-py3-none-macosx_11_0_arm64.whl", hash = "sha256:c656af9c1e6aaa7f59bf3d8995f2fa09adbf6762b470ed284c31dca80d686a26", size = 36798484, upload-time = "2025-11-09T12:56:59.998Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/46/ffe177f99f897a59dc237a20059020427bd2d3853d713992b8081933ddfe/pyqt5_qt5-5.15.18-py3-none-manylinux2014_x86_64.whl", hash = "sha256:bf2457e6371969736b4f660a0c153258fa03dbc6a181348218e6f05421682af7", size = 60864590, upload-time = "2025-11-09T12:57:26.724Z" },
 ]
 
 [[package]]
@@ -4559,7 +4569,7 @@ wheels = [
 
 [[package]]
 name = "spatialdata"
-version = "0.5.0"
+version = "0.6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anndata" },
@@ -4567,7 +4577,7 @@ dependencies = [
     { name = "dask" },
     { name = "dask-image" },
     { name = "datashader" },
-    { name = "fsspec" },
+    { name = "fsspec", extra = ["http", "s3"] },
     { name = "geopandas" },
     { name = "multiscale-spatial-image" },
     { name = "networkx" },
@@ -4584,14 +4594,15 @@ dependencies = [
     { name = "shapely" },
     { name = "spatial-image" },
     { name = "typing-extensions" },
+    { name = "universal-pathlib" },
     { name = "xarray" },
     { name = "xarray-schema" },
     { name = "xarray-spatial" },
     { name = "zarr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/31/29/9e7c46cf134854e27996fd4af7d27e184e57f5083b019e9757c4add6a600/spatialdata-0.5.0.tar.gz", hash = "sha256:3c316cdebe7306e887f9383c360993a1db0a7bd1b00b5673d831d23769acf63b", size = 326264, upload-time = "2025-08-15T21:38:50.213Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/78/97a108c20c539a110fd336608d300be568593e047a717ea66ed2e16bdf73/spatialdata-0.6.1.tar.gz", hash = "sha256:d0295feb90b16a6802f13e85780243fe7aecb838b44ba433c304805eac01d555", size = 332031, upload-time = "2025-11-15T15:06:56.74Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/45/f16a66337b05f6c4829d0e9bdc0c6f876e5a193a1cdc1c88f7dee5a3762a/spatialdata-0.5.0-py3-none-any.whl", hash = "sha256:0d513c7da63e4b05a197af70605c51bf074c3fceb81fcdda282637efef425ea6", size = 185333, upload-time = "2025-08-15T21:38:49.045Z" },
+    { url = "https://files.pythonhosted.org/packages/17/a1/e538ae38d9424f62199266b4e4ccd780e149162fa828a9e1f7b8e745262e/spatialdata-0.6.1-py3-none-any.whl", hash = "sha256:64a06b481859d22bd72e910c2cfd10af4b6c56be8e78404f096712558cd66ee8", size = 187279, upload-time = "2025-11-15T15:06:54.969Z" },
 ]
 
 [package.optional-dependencies]
@@ -5086,6 +5097,19 @@ wheels = [
 ]
 
 [[package]]
+name = "universal-pathlib"
+version = "0.3.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "pathlib-abc" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6e/ec/764b0d4593c6a8f5f66b347a19b5db9486dd0024b5e3339d468064a90c76/universal_pathlib-0.3.8.tar.gz", hash = "sha256:ead2b65bca3df6e11c3b7cb36fc9846340bc3c2db4ef57131550260422b0a3e8", size = 258837, upload-time = "2026-01-11T22:13:53.328Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/86/2c/fc9416619a418e94576aef84ef263906a24f76a21a1c3e96ddae25c82df9/universal_pathlib-0.3.8-py3-none-any.whl", hash = "sha256:dac4fd9a3df918d85bb6da678e794b5dfa9ecdb5ff74675b497553dbe50134b8", size = 82608, upload-time = "2026-01-11T22:13:51.313Z" },
+]
+
+[[package]]
 name = "uri-template"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5400,17 +5424,19 @@ wheels = [
 
 [[package]]
 name = "zarr"
-version = "2.18.7"
+version = "3.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "asciitree" },
-    { name = "fasteners", marker = "sys_platform != 'emscripten'" },
+    { name = "donfig" },
+    { name = "google-crc32c" },
     { name = "numcodecs" },
     { name = "numpy" },
+    { name = "packaging" },
+    { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/1d/01cf9e3ab2d85190278efc3fca9f68563de35ae30ee59e7640e3af98abe3/zarr-2.18.7.tar.gz", hash = "sha256:b2b8f66f14dac4af66b180d2338819981b981f70e196c9a66e6bfaa9e59572f5", size = 3604558, upload-time = "2025-04-09T07:59:28.482Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/76/7fa87f57c112c7b9c82f0a730f8b6f333e792574812872e2cd45ab604199/zarr-3.1.5.tar.gz", hash = "sha256:fbe0c79675a40c996de7ca08e80a1c0a20537bd4a9f43418b6d101395c0bba2b", size = 366825, upload-time = "2025-11-21T14:06:01.492Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/d8/9ffd8c237b3559945bb52103cf0eed64ea098f7b7f573f8d2962ef27b4b2/zarr-2.18.7-py3-none-any.whl", hash = "sha256:ac3dc4033e9ae4e9d7b5e27c97ea3eaf1003cc0a07f010bd83d5134bf8c4b223", size = 211273, upload-time = "2025-04-09T07:59:27.039Z" },
+    { url = "https://files.pythonhosted.org/packages/44/15/bb13b4913ef95ad5448490821eee4671d0e67673342e4d4070854e5fe081/zarr-3.1.5-py3-none-any.whl", hash = "sha256:29cd905afb6235b94c09decda4258c888fcb79bb6c862ef7c0b8fe009b5c8563", size = 284067, upload-time = "2025-11-21T14:05:59.235Z" },
 ]
 
 [[package]]

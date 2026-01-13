@@ -34,13 +34,13 @@ dependencies = [
     "scipy>=1.15.2",
     "segmentation-models-pytorch>=0.3.0",
     "shapely>=2.1.1",
-    "spatialdata[extra]>=0.5.0",
+    "spatialdata[extra]>=0.6.1",
     "tifffile>=2025.3.30",
     "timm>=0.4.0, <0.5",
     "torch>=2.6.0",
     "torchvision>=0.22.0",
     "tqdm>=4.67.1",
-    "zarr<3",
+    "zarr>=3.1.5",
 ]
 
 [project.optional-dependencies]
