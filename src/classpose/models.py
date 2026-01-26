@@ -9,7 +9,6 @@ import torch
 from scipy.ndimage import gaussian_filter
 from tqdm import trange
 from PyQt5.QtWidgets import QProgressBar
-from scipy.stats import mode
 
 
 from cellpose import transforms, dynamics, utils, plot
