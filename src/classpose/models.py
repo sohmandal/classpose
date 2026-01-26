@@ -9,7 +9,6 @@ import torch
 from scipy.ndimage import gaussian_filter
 from tqdm import trange
 from PyQt5.QtWidgets import QProgressBar
-from scipy.stats import mode
 
 
 from cellpose import transforms, dynamics, utils, plot
@@ -161,25 +160,32 @@ def compute_class_masks(
     Returns:
         tuple[np.ndarray, np.ndarray]: Class masks and unique instances.
     """
-
     squeezed_y_class = y_class.squeeze()
     class_predictions_pixelwise = squeezed_y_class.argmax(axis=0)
 
-    class_masks = np.zeros_like(masks)
+    # flatten data to hw
+    inst = masks.ravel()
+    cls = class_predictions_pixelwise.ravel()
+    max_inst = int(inst.max())
+    n_classes = int(squeezed_y_class.shape[0])
+
+    # ignores bg
+    valid = inst > 0
+    # creates a 1D-index for (instance_id, class_id) pair
+    # multiplication is used to avoid collisions
+    idx = inst[valid] * n_classes + cls[valid]
+    counts = np.bincount(
+        idx,
+        minlength=(max_inst + 1) * n_classes,
+    )
+    # thanks to minlength, counts is (max_inst + 1, n_classes)
+    counts = counts.reshape(max_inst + 1, n_classes)
+
+    instance_major_class = counts.argmax(axis=1)
+    instance_major_class[0] = 0
+
+    class_masks = instance_major_class[masks]
     unique_instances = np.unique(masks)
-    for instance_id in unique_instances:
-        if instance_id == 0:  # Skip background
-            continue
-        instance_pixels = masks == instance_id
-        if np.any(instance_pixels):
-            pixel_classes = class_predictions_pixelwise[instance_pixels]
-            if pixel_classes.size > 0:
-                mode_result = mode(pixel_classes, axis=None, keepdims=False)
-                instance_class_label = mode_result.mode
-                class_masks[instance_pixels] = instance_class_label
-            else:
-                # assuming where an instance might not have any class predictions (should not happen ideally)
-                class_masks[instance_pixels] = 0
     return class_masks, unique_instances
 
 
