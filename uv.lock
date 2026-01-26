@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'darwin'",
@@ -555,6 +555,7 @@ dependencies = [
     { name = "numba" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
+    { name = "openslide-bin" },
     { name = "openslide-python" },
     { name = "pre-commit" },
     { name = "pydantic" },
@@ -605,6 +606,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.61.2" },
     { name = "numpy", specifier = ">=2.0.2" },
     { name = "opencv-python-headless", specifier = ">=4.11.0.86" },
+    { name = "openslide-bin", specifier = ">=4.0.0.11" },
     { name = "openslide-python", specifier = ">=1.4.2" },
     { name = "pre-commit", specifier = ">=4.3.0" },
     { name = "pydantic", specifier = ">=2.11.9" },
@@ -2965,6 +2967,18 @@ wheels = [
 ]
 
 [[package]]
+name = "openslide-bin"
+version = "4.0.0.11"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/45/32fcc407c99621e67c9fd7906eed953ccbfedac56bbde0d770132eadf3c6/openslide_bin-4.0.0.11.tar.gz", hash = "sha256:6b0c6d18e1ac5d246f7de6fb116540486219a2696ecb833f9d386fb73b330952", size = 17546952, upload-time = "2026-01-04T09:08:09.8Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/0b/7099abbe00ecf205007359111b483c6c4830e56584af9a54959fe533f35f/openslide_bin-4.0.0.11-py3-none-macosx_11_0_universal2.whl", hash = "sha256:ec8337c6afaf3fea74a4b8fd4df08e9cdf13f475c157d64d61ba8985fe553a20", size = 5457719, upload-time = "2026-01-04T09:08:01.501Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/4d/0b70552f3f248fb8a22e43dc848ea98f2006909ee00ec590c64a04c674f1/openslide_bin-4.0.0.11-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:c56009ce1d6167ef4897881055e00a9dd2e13a82f09b227dddb84f8d7f9e187a", size = 4235049, upload-time = "2026-01-04T09:08:03.803Z" },
+    { url = "https://files.pythonhosted.org/packages/68/99/212710e3212a07bc930d657da50b3cac66a6fca3157d43bf97a4531778cf/openslide_bin-4.0.0.11-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:928b8532841f4b75b595d3a8c7c6a64205dbc7f4c5268fdd696d8374db194f9f", size = 4339551, upload-time = "2026-01-04T09:08:05.908Z" },
+    { url = "https://files.pythonhosted.org/packages/69/8a/e46bca045f3a5aaef533e3a90dd2033694f08879f96b61665423d5d90e83/openslide_bin-4.0.0.11-py3-none-win_amd64.whl", hash = "sha256:8330b61f83d460a84fa4917d084bdfde66b84bd86a84cb98d82e09f349b19861", size = 4294929, upload-time = "2026-01-04T09:08:07.942Z" },
+]
+
+[[package]]
 name = "openslide-python"
 version = "1.4.3"
 source = { registry = "https://pypi.org/simple" }
@@ -3792,7 +3806,6 @@ resolution-markers = [
 wheels = [
     { url = "https://files.pythonhosted.org/packages/46/90/bf01ac2132400997a3474051dd680a583381ebf98b2f5d64d4e54138dc42/pyqt5_qt5-5.15.18-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:8bb997eb903afa9da3221a0c9e6eaa00413bbeb4394d5706118ad05375684767", size = 39715743, upload-time = "2025-11-09T12:56:42.936Z" },
     { url = "https://files.pythonhosted.org/packages/24/8e/76366484d9f9dbe28e3bdfc688183433a7b82e314216e9b14c89e5fab690/pyqt5_qt5-5.15.18-py3-none-macosx_11_0_arm64.whl", hash = "sha256:c656af9c1e6aaa7f59bf3d8995f2fa09adbf6762b470ed284c31dca80d686a26", size = 36798484, upload-time = "2025-11-09T12:56:59.998Z" },
-    { url = "https://files.pythonhosted.org/packages/9a/46/ffe177f99f897a59dc237a20059020427bd2d3853d713992b8081933ddfe/pyqt5_qt5-5.15.18-py3-none-manylinux2014_x86_64.whl", hash = "sha256:bf2457e6371969736b4f660a0c153258fa03dbc6a181348218e6f05421682af7", size = 60864590, upload-time = "2025-11-09T12:57:26.724Z" },
 ]
 
 [[package]]
