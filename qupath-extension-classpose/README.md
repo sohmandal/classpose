@@ -16,7 +16,7 @@ N.B.: Please note that if you use any part of Classpose which makes use of Grand
 ## Requirements
 
 - QuPath 0.6.x
-- [`uv`](https://docs.astral.sh/uv/) (this should be accessible as a command line tool)
+- [`uv`](https://docs.astral.sh/uv/) and [`git`](https://git-scm.com/install/) (these should be accessible as a command line tools)
 
 ## Installation
 
