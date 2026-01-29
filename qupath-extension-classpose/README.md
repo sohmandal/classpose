@@ -16,12 +16,7 @@ N.B.: Please note that if you use any part of Classpose which makes use of Grand
 ## Requirements
 
 - QuPath 0.6.x
-- A Python environment with:
-  - `classpose` (your repository installed)
-  - `torch`, `torchvision`
-  - `openslide-python`
-  - `grandqc` dependencies as used by `classpose`
-- A trained Classpose model file (path provided in the dialog)
+- [`uv`](https://docs.astral.sh/uv/) (this should be accessible as a command line tool)
 
 ## Installation
 
