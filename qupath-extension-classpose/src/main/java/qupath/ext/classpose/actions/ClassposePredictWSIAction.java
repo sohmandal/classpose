@@ -124,6 +124,12 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
         grid.add(lblModel, 0, row);
         grid.add(cbModelChoice, 1, row++);
 
+        Label lblNuclsWarning = new Label("Disclaimer: 'nucls' may have subpar performance compared to other presets. Consider using another model or a local model if results are unsatisfactory.");
+        lblNuclsWarning.setWrapText(true);
+        lblNuclsWarning.setManaged(false);
+        lblNuclsWarning.setVisible(false);
+        grid.add(lblNuclsWarning, 1, row++, 2, 1);
+
         TextField tfLocalModel = new TextField();
         addRow(grid, row++, "Local model", tfLocalModel, false, () -> browseFile(tfLocalModel, "Select local model file"));
 
@@ -148,7 +154,16 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
         cbModelChoice.getSelectionModel().selectedItemProperty().addListener((obs, ov, nv) -> {
             boolean useLocal = LOCAL_OPTION.equals(nv);
             tfLocalModel.setDisable(!useLocal);
+
+            boolean showNucls = "nucls".equals(nv);
+            lblNuclsWarning.setManaged(showNucls);
+            lblNuclsWarning.setVisible(showNucls);
         });
+
+        String initModel = cbModelChoice.getSelectionModel().getSelectedItem();
+        boolean initNucls = "nucls".equals(initModel);
+        lblNuclsWarning.setManaged(initNucls);
+        lblNuclsWarning.setVisible(initNucls);
 
 
         TextField tfOut = new TextField();
@@ -329,6 +344,11 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
             // Sync enable state of local model field
             boolean useLocalInit = "local model (specify below)".equals(cbModelChoice.getSelectionModel().getSelectedItem());
             tfLocalModel.setDisable(!useLocalInit);
+
+            String restoredModel = cbModelChoice.getSelectionModel().getSelectedItem();
+            boolean showNucls = "nucls".equals(restoredModel);
+            lblNuclsWarning.setManaged(showNucls);
+            lblNuclsWarning.setVisible(showNucls);
             String out = Prefs.getString("output_folder", null); if (out != null) tfOut.setText(out);
         } catch (Throwable ignored) {}
 
