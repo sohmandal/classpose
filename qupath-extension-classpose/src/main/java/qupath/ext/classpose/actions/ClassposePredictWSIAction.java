@@ -124,6 +124,8 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
         grid.add(lblModel, 0, row);
         grid.add(cbModelChoice, 1, row++);
 
+        final boolean[] nuclsWarningShown = new boolean[] { false };
+
         TextField tfLocalModel = new TextField();
         addRow(grid, row++, "Local model", tfLocalModel, false, () -> browseFile(tfLocalModel, "Select local model file"));
 
@@ -148,6 +150,15 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
         cbModelChoice.getSelectionModel().selectedItemProperty().addListener((obs, ov, nv) -> {
             boolean useLocal = LOCAL_OPTION.equals(nv);
             tfLocalModel.setDisable(!useLocal);
+
+            if (!nuclsWarningShown[0] && "nucls".equals(nv) && !"nucls".equals(ov)) {
+                nuclsWarningShown[0] = true;
+                Alert alert = new Alert(Alert.AlertType.WARNING);
+                alert.setTitle("Classpose – Disclaimer");
+                alert.setHeaderText("'nucls' performance may be subpar");
+                alert.setContentText("The 'nucls' preset may produce lower-quality results compared to other models. Take extra caution when using this model and consider selecting another model or using a local model if results are unsatisfactory.");
+                alert.showAndWait();
+            }
         });
 
 
