@@ -214,10 +214,12 @@ class HEStainingTransform:
             image_hwc = image
             channels_first = False
 
+        max_is_255 = True
         # Convert to uint8 if needed
         if image_hwc.dtype != np.uint8:
             if image_hwc.max() <= 1.0:
                 image_hwc = (image_hwc * 255).astype(np.uint8)
+                max_is_255 = False
             else:
                 image_hwc = image_hwc.astype(np.uint8)
 
@@ -236,7 +238,9 @@ class HEStainingTransform:
             )
 
             # Convert back to original format
-            if image.dtype == np.float32 or image.dtype == np.float64:
+            if max_is_255:
+                augmented = augmented.astype(image.dtype)
+            elif image.dtype == np.float32 or image.dtype == np.float64:
                 augmented = augmented.astype(image.dtype) / 255.0
             else:
                 augmented = augmented.astype(image.dtype)
@@ -248,7 +252,9 @@ class HEStainingTransform:
             augmented = image_hwc
 
             # Convert back to original format for failed case
-            if image.dtype == np.float32 or image.dtype == np.float64:
+            if max_is_255:
+                augmented = augmented.astype(image.dtype)
+            elif image.dtype == np.float32 or image.dtype == np.float64:
                 augmented = augmented.astype(image.dtype) / 255.0
             else:
                 augmented = augmented.astype(image.dtype)
