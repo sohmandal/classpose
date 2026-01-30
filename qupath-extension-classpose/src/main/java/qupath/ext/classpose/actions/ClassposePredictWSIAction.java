@@ -156,7 +156,7 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
                 Alert alert = new Alert(Alert.AlertType.WARNING);
                 alert.setTitle("Classpose – Disclaimer");
                 alert.setHeaderText("'nucls' performance may be subpar");
-                alert.setContentText("The 'nucls' preset may produce lower-quality results compared to other model presets. Consider selecting another model or using a local model if results are unsatisfactory.");
+                alert.setContentText("The 'nucls' preset may produce lower-quality results compared to other models. Take extra caution when using this model and consider selecting another model or using a local model if results are unsatisfactory.");
                 alert.showAndWait();
             }
         });
