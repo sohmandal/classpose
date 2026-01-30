@@ -27,7 +27,6 @@ Prerequisites:
 
 - [`uv`](https://docs.astral.sh/uv/)
 - [`git`](https://git-scm.com/install/)
-- [`openslide`](https://openslide.org/) for WSI inference
 
 To use this as a CLI you just need to migrate to this directory and append `uv run` to every command you run. This ensures that the correct Python version and dependencies are used. To simply install all dependencies in a virtual environment, run `uv sync`. This will create a virtual environment in `./.venv` and install all dependencies.
 
