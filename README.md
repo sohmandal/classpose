@@ -39,7 +39,7 @@ Required arguments:
 
 ```
   --model_config MODEL_CONFIG
-                        One of 'conic', 'consep', 'glysac', 'monusac', 'puma' or a path to a model config YAML file.
+                        One of 'conic', 'consep', 'glysac', 'monusac', 'nucls', 'puma' or a path to a model config YAML file.
   --slide_path SLIDE_PATH
                         Path to the whole-slide image to process (e.g. .svs, .tiff; any
                         format supported by OpenSlide).
@@ -133,9 +133,10 @@ The following model configurations are available:
 - `consep`
 - `glysac`
 - `monusac`
+- `nucls`
 - `puma`
 
-These will automatically download the model to the path defined in the `CLASSPOSE_MODEL_DIR` environment variable (default: `~/.classpose_models`).
+These will automatically download the model to the path defined in the `CLASSPOSE_MODEL_DIR` environment variable (default: `~/.classpose_models`). The `nucls` model may produce lower-quality results compared to other models. Take extra caution when using this model.
 
 #### Local/custom
 
