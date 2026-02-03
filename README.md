@@ -20,6 +20,7 @@ This project:
 - WSI pipeline with tissue and optional artefact detection (GrandQC-based components in `src/classpose/grandqc/`).
 - CLI entrypoint: `classpose-predict-wsi` (also available via `python -m classpose.entrypoints.predict_wsi`).
 - QuPath integration: [qupath-extension-classpose](./qupath-extension-classpose) with UI, live logging, and auto-import.
+- [Nextflow pipeline](https://github.com/adamjtaylor/nf-classpose) implemented by [Adam Taylor](https://github.com/adamjtaylor)
 
 ## Installation
 
@@ -136,6 +137,8 @@ The following model configurations are available:
 - `puma`
 
 These will automatically download the model to the path defined in the `CLASSPOSE_MODEL_DIR` environment variable (default: `~/.classpose_models`). The `nucls` model may produce lower-quality results compared to other models. Take extra caution when using this model.
+
+**Important:** Classpose requires internet access to download models. If, at runtime, you do not have internet access, you must download the models you want to use from HuggingFace ([here](https://huggingface.co/classpose/classpose)) and place them in `CLASSPOSE_MODEL_DIR` (i.e. as noted this defaults to `~/.classpose_models`). In case you want to use either tissue detection or artefact detection (both from GrandQC), you must download these models yourself from the following links: [tissue detection](http://zenodo.org/records/14507273/files/Tissue_Detection_MPP10.pth) and [artefact detection](https://zenodo.org/records/14041538/files/GrandQC_MPP1.pth).
 
 #### Local/custom
 
