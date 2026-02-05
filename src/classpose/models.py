@@ -8,7 +8,6 @@ import numpy as np
 import torch
 from scipy.ndimage import gaussian_filter
 from tqdm import trange
-from PyQt5.QtWidgets import QProgressBar
 
 
 from cellpose import transforms, dynamics, utils, plot
@@ -455,7 +454,7 @@ class ClassposeModel(CellposeModel):
         tile_overlap: float = 0.1,
         bsize: int = 256,
         compute_masks: bool = True,
-        progress: QProgressBar | None = None,
+        progress=None,
     ):
         """segment list of images x, or 4D array - Z x 3 x Y x X
 
@@ -496,7 +495,7 @@ class ClassposeModel(CellposeModel):
             bsize (int, optional): block size for tiles, recommended to keep at 224, like in training. Defaults to 224.
             interp (bool, optional): interpolate during 2D dynamics (not available in 3D) . Defaults to True.
             compute_masks (bool, optional): Whether or not to compute dynamics and return masks. Returns empty array if False. Defaults to True.
-            progress (QProgressBar, optional): pyqt progress bar. Defaults to None.
+            progress (optional): pyqt progress bar. Defaults to None.
 
         Returns:
             A tuple containing (masks, flows, styles, diams):

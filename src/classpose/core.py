@@ -2,7 +2,6 @@ import numpy as np
 import torch
 from cellpose import transforms
 from cellpose.core import tqdm_out
-from PyQt5.QtWidgets import QProgressBar
 from tqdm import trange
 
 from classpose.log import get_logger
@@ -240,7 +239,7 @@ def run_3D(
     tile_overlap: float = 0.1,
     bsize: int = 224,
     net_ortho: torch.nn.Module | None = None,
-    progress: QProgressBar | None = None,
+    progress=None,
 ):
     """
     Run network on image z-stack. Runs faster if augment is False.
@@ -254,7 +253,7 @@ def run_3D(
         tile_overlap (float, optional): Fraction of overlap of tiles when computing flows. Defaults to 0.1.
         bsize (int, optional): Size of tiles to use in pixels [bsize x bsize]. Defaults to 224.
         net_ortho (class, optional): cellpose network for orthogonal ZY and ZX planes. Defaults to None.
-        progress (QProgressBar, optional): pyqt progress bar. Defaults to None.
+        progress (optional): pyqt progress bar. Defaults to None.
 
     Returns:
         Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]:
