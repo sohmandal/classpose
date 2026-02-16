@@ -5,13 +5,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1
 
 WORKDIR /app
-COPY uv.lock README.md /app/
-COPY pyproject.toml /app/pyproject.toml
-COPY src /app/src
 
 # Install build dependencies
 RUN apt update && apt install -y --no-install-recommends git build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+COPY uv.lock README.md /app/
+COPY pyproject.toml /app/pyproject.toml
+COPY src /app/src
 
 # Create non-root user with home and cache directories
 RUN addgroup --system app \
