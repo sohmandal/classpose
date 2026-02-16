@@ -37,6 +37,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="spatialdata")
 warnings.filterwarnings("ignore", message=".*ImplicitModification.*")
 warnings.filterwarnings("ignore", message=".*Transforming to str index.*")
 
+import os
 import argparse
 import json
 import logging
@@ -65,7 +66,11 @@ from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.grandqc.wsi_tissue_detection import detect_tissue_wsi
 from classpose.model_configs import DEFAULT_MODEL_CONFIGS, ModelConfig
 from classpose.models import ClassposeModel
-from classpose.utils import get_device, get_slide_resolution
+from classpose.utils import (
+    get_device,
+    get_slide_resolution,
+    download_if_unavailable,
+)
 from classpose.entrypoints.outputs import (
     calculate_cellular_densities,
     create_spatialdata_output,
@@ -146,7 +151,20 @@ class SlideLoader:
         self.p.start()
 
     def _init_slide(self):
-        self.slide = OpenSlide(self.slide_path)
+        self.downloaded_slide = None
+        if self.slide_path.startswith("http"):
+            slide_name = self.slide_path.split("/")[-1].split("?")[0]
+            self.real_slide_path = f".tmp/{slide_name}"
+            logger.info(
+                f"Downloading slide from {self.slide_path} to {self.real_slide_path}"
+            )
+            download_if_unavailable(
+                self.real_slide_path, self.slide_path, "Downloading slide data"
+            )
+            self.downloaded_slide = self.real_slide_path
+        else:
+            self.real_slide_path = self.slide_path
+        self.slide = OpenSlide(self.real_slide_path)
         self.mpp = get_slide_resolution(self.slide)
         self.mpp_x.value = self.mpp[0]
         self.mpp_y.value = self.mpp[1]
@@ -333,6 +351,9 @@ class SlideLoader:
         Closes the queue and joins the process.
         """
         self.p.join()
+        if self.downloaded_slide is not None:
+            logger.info(f"Removing downloaded slide {self.downloaded_slide}")
+            os.remove(self.downloaded_slide)
 
 
 class PostProcessor:
@@ -1230,7 +1251,7 @@ def main(args):
                 artefact_cnts,
                 artefact_geojson,
             ) = detect_artefacts_wsi(
-                slide=OpenSlide(args.slide_path),
+                slide=OpenSlide(slide.real_slide_path),
                 model_art_path=args.artefact_detection_model_path,
                 model_td_path=args.tissue_detection_model_path,
                 device=devices[0],
