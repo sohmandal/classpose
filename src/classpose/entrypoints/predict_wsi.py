@@ -136,6 +136,8 @@ class SlideLoader:
         self.roi_tree = roi_tree
         self.device = device
 
+        self.downloaded_slide = None
+
         if manager is None:
             manager = tmproc.Manager()
 
@@ -151,7 +153,6 @@ class SlideLoader:
         self.p.start()
 
     def _init_slide(self):
-        self.downloaded_slide = None
         if self.slide_path.startswith("http"):
             slide_name = self.slide_path.split("/")[-1].split("?")[0]
             self.real_slide_path = f".tmp/{slide_name}"
@@ -185,7 +186,7 @@ class SlideLoader:
                 self._get_coords(
                     self.tile_size, self.overlap, self.slide_dim, self.ts.value
                 )
-            )
+            )[600:650]
         logger.info(f"Slide mpp: {self.mpp}")
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
@@ -199,7 +200,7 @@ class SlideLoader:
         if self.tissue_detection_model_path is not None:
             logger.info("Detecting tissue contours using GrandQC")
             _, _, _, tissue_cnts, _, _ = detect_tissue_wsi(
-                slide=OpenSlide(self.slide_path),
+                slide=OpenSlide(self.real_slide_path),
                 model_td_path=self.tissue_detection_model_path,
                 min_area=self.min_area,
                 device=self.device,
