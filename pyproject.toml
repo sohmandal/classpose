@@ -1,20 +1,16 @@
 [project]
 name = "classpose"
 version = "0.1.0"
-description = "Add your description here"
+description = "A foundation model-driven whole slide image-scale cell phenotyping method with QuPath integration resources"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "bokeh>=3.7.2",
     "cellpose>=4.0.8",
     "dask>=2024.4.1,<=2024.11.2",
     "dask-image>=2024.5.3",
     "dask-jobqueue>=0.9.0",
-    "distributed>=2024.4.1,<=2024.11.2",
     "fastremap>=1.15.1",
-    "google-cloud-storage>=3.1.0",
     "huggingface-hub>=0.35.3",
-    "isort>=7.0.0",
     "matplotlib>=3.10.3",
     "natsort>=8.4.0",
     "numba>=0.61.2",
@@ -24,12 +20,7 @@ dependencies = [
     "openslide-python>=1.4.2",
     "pre-commit>=4.3.0",
     "pydantic>=2.11.9",
-    "pyqt5>=5.15.11",
-    "pyqtgraph>=0.13.7",
     "pyyaml>=6.0.2",
-    "qtpy>=2.4.3",
-    "roifile>=2025.2.20",
-    "ruff>=0.14.0",
     "scikit-image>=0.25.2",
     "scikit-learn>=1.6.1",
     "scipy>=1.15.2",
@@ -50,9 +41,6 @@ notebook = [
     "matplotlib>=3.10.1",
     "notebook>=7.4.0",
 ]
-
-[tool.uv.sources]
-cellpose = { git = "https://github.com/MouseLand/cellpose" }
 
 [build-system]
 requires = ["setuptools>=61.0"]
