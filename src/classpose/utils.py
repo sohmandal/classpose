@@ -416,12 +416,15 @@ def download_if_unavailable(
         utils_logger.info("%s %s", description, path)
         try:
             response = requests.get(url, stream=True, verify=True)
-        except requests.exceptions.SSLError as e:
+        except:
             if not ALLOW_UNSAFE_REQUESTS:
+                utils_logger.error(f"Cannot download slide from {url}")
                 utils_logger.error(
                     "Downloading using unsafe requests requires setting ALLOW_UNSAFE_REQUESTS to True"
                 )
-                raise e
+                raise ValueError(
+                    "Downloading using unsafe requests requires setting ALLOW_UNSAFE_REQUESTS to True"
+                )
             utils_logger.warning(
                 "Downloading using unsafe requests. This is not recommended for production use."
             )
