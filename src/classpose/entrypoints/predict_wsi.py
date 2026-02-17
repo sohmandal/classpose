@@ -23,9 +23,9 @@ The workflow is as follows:
     tissue contours, artefact contours, and optionally cellular densities as CSV
     and/or a unified SpatialData Zarr store.
 
-Please note that if you use any part of Classpose which makes use of GrandQC please 
-follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main to cite them 
-appropriately. Similarly to Classpose, GrandQC is under a non-commercial license 
+Please note that if you use any part of Classpose which makes use of GrandQC please
+follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main to cite them
+appropriately. Similarly to Classpose, GrandQC is under a non-commercial license
 whose terms can be found at https://github.com/cpath-ukk/grandqc/blob/main/LICENSE.
 """
 
@@ -186,7 +186,7 @@ class SlideLoader:
                 self._get_coords(
                     self.tile_size, self.overlap, self.slide_dim, self.ts.value
                 )
-            )  # [600:650]
+            )
         logger.info(f"Slide mpp: {self.mpp}")
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
@@ -458,32 +458,14 @@ class PostProcessor:
                 curr_coords.append(curr_coords[0])
                 cl = class_masks[cell_mask][0]
                 curr_cell = {
-                    "type": "Feature",
                     "id": str(uuid.uuid4()),
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [curr_coords],
-                    },
-                    "properties": {
-                        "objectType": "annotation",
-                        "isLocked": False,
-                        "classification": {
-                            "name": self.labels[int(cl) - 1],
-                            "color": COLORMAP[int(cl) - 1],
-                        },
-                        "measurements": [
-                            {"name": "area", "value": polygon.area},
-                            {"name": "perimeter", "value": polygon.length},
-                            {
-                                "name": "centroidX",
-                                "value": center[0],
-                            },
-                            {
-                                "name": "centroidY",
-                                "value": center[1],
-                            },
-                        ],
-                    },
+                    "coords": curr_coords,
+                    "class_int": int(cl) - 1,
+                    "area": polygon.area,
+                    "label": self.labels[int(cl) - 1],
+                    "color": COLORMAP[int(cl) - 1],
+                    "perimeter": polygon.length,
+                    "centroid": center,
                 }
                 curr_cells.append(curr_cell)
             self.polygons.put(curr_cells)
@@ -578,6 +560,50 @@ def worker(
             f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
         )
         print()
+
+
+def to_geojson_polygon(curr_cell: dict) -> dict:
+    """
+    Formats ``curr_cell`` outputs as polygons for GeoJSON.
+
+    Args:
+        curr_cell (dict): cell outputs. These should feature an id (str),
+            coords (a list), a label (str or int), a color (list of int), an
+            area (float), a perimeter (float) and a centroid (a tuple with
+            ints).
+
+    Returns:
+        A cellular polygon for GeoJSON.
+    """
+    curr_cell = {
+        "type": "Feature",
+        "id": curr_cell["id"],
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [curr_cell["coords"]],
+        },
+        "properties": {
+            "objectType": "annotation",
+            "isLocked": False,
+            "classification": {
+                "name": curr_cell["label"],
+                "color": curr_cell["color"],
+            },
+            "measurements": [
+                {"name": "area", "value": curr_cell["area"]},
+                {"name": "perimeter", "value": curr_cell["perimeter"]},
+                {
+                    "name": "centroidX",
+                    "value": curr_cell["centroid"][0],
+                },
+                {
+                    "name": "centroidY",
+                    "value": curr_cell["centroid"][1],
+                },
+            ],
+        },
+    }
+    return curr_cell
 
 
 def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
@@ -709,11 +735,9 @@ def shapely_polygon_to_geojson(
 
 def load_roi_polygons(
     roi_geojson_path: str, group_by_class: bool = False
-) -> (
-    shapely.STRtree
-    | tuple[shapely.STRtree, dict[str, list[shapely.Polygon]]]
-    | None
-):
+) -> shapely.STRtree | tuple[
+    shapely.STRtree, dict[str, list[shapely.Polygon]]
+] | None:
     """
     Load ROI polygons from a GeoJSON file (FeatureCollection).
 
@@ -1181,7 +1205,7 @@ def main(args):
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
         while not pp.polygons.empty():
-            polygons.extend(pp.polygons.get())
+            polygons.extend([to_geojson_polygon(x) for x in pp.polygons.get()])
             pbar.update()
     logger.info(f"Number of detected cells: {len(polygons)}")
     logger.info(f"Number of invalid cells: {pp.n_invalid_cells.value}")
