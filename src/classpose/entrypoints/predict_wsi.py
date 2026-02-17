@@ -186,7 +186,7 @@ class SlideLoader:
                 self._get_coords(
                     self.tile_size, self.overlap, self.slide_dim, self.ts.value
                 )
-            )[600:650]
+            )  # [600:650]
         logger.info(f"Slide mpp: {self.mpp}")
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
@@ -1103,7 +1103,7 @@ def main(args):
     if model_config.cell_types:
         if len(model_config.cell_types) != n_classes - 1:
             raise ValueError(
-                f"Number of labels ({len(model_config.cell_types)}) does not match number of classes ({n_classes})"
+                f"Number of labels ({len(model_config.cell_types)}) does not match number of classes ({n_classes - 1})"
             )
         logger.info(f"Using labels: {model_config.cell_types}")
         labels = model_config.cell_types
@@ -1442,7 +1442,9 @@ def main_with_args():
         "--slide_path",
         type=str,
         required=True,
-        help="Path to the test dataset directory (must contain images.npy and labels.npy).",
+        help="Path to the whole-slide image to process (e.g. .svs, .tiff; any "
+        "format supported by OpenSlide). If the slide is an HTTP/HTTPS URL, "
+        "it will be downloaded to a temporary directory (`.tmp`).",
     )
     parser.add_argument(
         "--tissue_detection_model_path",
