@@ -17,6 +17,15 @@ from classpose.log import get_logger
 
 utils_logger = get_logger(__name__)
 
+ALLOW_UNSAFE_REQUESTS = os.getenv("ALLOW_UNSAFE_REQUESTS", "false").lower() in [
+    "true",
+    "1",
+]
+if ALLOW_UNSAFE_REQUESTS:
+    utils_logger.warning(
+        "Unsafe requests enabled. This is not recommended for production use."
+    )
+
 
 def get_default_device(
     device: str | torch.device | None = None,
@@ -405,7 +414,18 @@ def download_if_unavailable(
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         utils_logger.info("%s %s", description, path)
-        response = requests.get(url, stream=True, verify=False)
+        try:
+            response = requests.get(url, stream=True, verify=True)
+        except requests.exceptions.SSLError as e:
+            if not ALLOW_UNSAFE_REQUESTS:
+                utils_logger.error(
+                    "Downloading using unsafe requests requires setting ALLOW_UNSAFE_REQUESTS to True"
+                )
+                raise e
+            utils_logger.warning(
+                "Downloading using unsafe requests. This is not recommended for production use."
+            )
+            response = requests.get(url, stream=True, verify=False)
         total_size = int(response.headers.get("content-length", 0))
         block_size = 8192
         with open(path, "wb") as f:
