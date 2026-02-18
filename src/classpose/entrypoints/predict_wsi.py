@@ -23,9 +23,9 @@ The workflow is as follows:
     tissue contours, artefact contours, and optionally cellular densities as CSV
     and/or a unified SpatialData Zarr store.
 
-Please note that if you use any part of Classpose which makes use of GrandQC please 
-follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main to cite them 
-appropriately. Similarly to Classpose, GrandQC is under a non-commercial license 
+Please note that if you use any part of Classpose which makes use of GrandQC please
+follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main to cite them
+appropriately. Similarly to Classpose, GrandQC is under a non-commercial license
 whose terms can be found at https://github.com/cpath-ukk/grandqc/blob/main/LICENSE.
 """
 
@@ -37,6 +37,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="spatialdata")
 warnings.filterwarnings("ignore", message=".*ImplicitModification.*")
 warnings.filterwarnings("ignore", message=".*Transforming to str index.*")
 
+import os
 import argparse
 import json
 import logging
@@ -65,7 +66,11 @@ from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.grandqc.wsi_tissue_detection import detect_tissue_wsi
 from classpose.model_configs import DEFAULT_MODEL_CONFIGS, ModelConfig
 from classpose.models import ClassposeModel
-from classpose.utils import get_device, get_slide_resolution
+from classpose.utils import (
+    get_device,
+    get_slide_resolution,
+    download_if_unavailable,
+)
 from classpose.entrypoints.outputs import (
     calculate_cellular_densities,
     create_spatialdata_output,
@@ -131,6 +136,8 @@ class SlideLoader:
         self.roi_tree = roi_tree
         self.device = device
 
+        self.downloaded_slide = None
+
         if manager is None:
             manager = tmproc.Manager()
 
@@ -146,7 +153,19 @@ class SlideLoader:
         self.p.start()
 
     def _init_slide(self):
-        self.slide = OpenSlide(self.slide_path)
+        if self.slide_path.startswith("http"):
+            slide_name = self.slide_path.split("/")[-1].split("?")[0]
+            self.real_slide_path = f".tmp/{slide_name}"
+            logger.info(
+                f"Downloading slide from {self.slide_path} to {self.real_slide_path}"
+            )
+            download_if_unavailable(
+                self.real_slide_path, self.slide_path, "Downloading slide data"
+            )
+            self.downloaded_slide = self.real_slide_path
+        else:
+            self.real_slide_path = self.slide_path
+        self.slide = OpenSlide(self.real_slide_path)
         self.mpp = get_slide_resolution(self.slide)
         self.mpp_x.value = self.mpp[0]
         self.mpp_y.value = self.mpp[1]
@@ -181,7 +200,7 @@ class SlideLoader:
         if self.tissue_detection_model_path is not None:
             logger.info("Detecting tissue contours using GrandQC")
             _, _, _, tissue_cnts, _, _ = detect_tissue_wsi(
-                slide=OpenSlide(self.slide_path),
+                slide=OpenSlide(self.real_slide_path),
                 model_td_path=self.tissue_detection_model_path,
                 min_area=self.min_area,
                 device=self.device,
@@ -333,6 +352,9 @@ class SlideLoader:
         Closes the queue and joins the process.
         """
         self.p.join()
+        if self.downloaded_slide is not None:
+            logger.info(f"Removing downloaded slide {self.downloaded_slide}")
+            os.remove(self.downloaded_slide)
 
 
 class PostProcessor:
@@ -436,32 +458,14 @@ class PostProcessor:
                 curr_coords.append(curr_coords[0])
                 cl = class_masks[cell_mask][0]
                 curr_cell = {
-                    "type": "Feature",
                     "id": str(uuid.uuid4()),
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [curr_coords],
-                    },
-                    "properties": {
-                        "objectType": "annotation",
-                        "isLocked": False,
-                        "classification": {
-                            "name": self.labels[int(cl) - 1],
-                            "color": COLORMAP[int(cl) - 1],
-                        },
-                        "measurements": [
-                            {"name": "area", "value": polygon.area},
-                            {"name": "perimeter", "value": polygon.length},
-                            {
-                                "name": "centroidX",
-                                "value": center[0],
-                            },
-                            {
-                                "name": "centroidY",
-                                "value": center[1],
-                            },
-                        ],
-                    },
+                    "coords": curr_coords,
+                    "class_int": int(cl) - 1,
+                    "area": polygon.area,
+                    "label": self.labels[int(cl) - 1],
+                    "color": COLORMAP[int(cl) - 1],
+                    "perimeter": polygon.length,
+                    "centroid": center,
                 }
                 curr_cells.append(curr_cell)
             self.polygons.put(curr_cells)
@@ -556,6 +560,50 @@ def worker(
             f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
         )
         print()
+
+
+def to_geojson_polygon(curr_cell: dict) -> dict:
+    """
+    Formats ``curr_cell`` outputs as polygons for GeoJSON.
+
+    Args:
+        curr_cell (dict): cell outputs. These should feature an id (str),
+            coords (a list), a label (str or int), a color (list of int), an
+            area (float), a perimeter (float) and a centroid (a tuple with
+            ints).
+
+    Returns:
+        A cellular polygon for GeoJSON.
+    """
+    curr_cell = {
+        "type": "Feature",
+        "id": curr_cell["id"],
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [curr_cell["coords"]],
+        },
+        "properties": {
+            "objectType": "annotation",
+            "isLocked": False,
+            "classification": {
+                "name": curr_cell["label"],
+                "color": curr_cell["color"],
+            },
+            "measurements": [
+                {"name": "area", "value": curr_cell["area"]},
+                {"name": "perimeter", "value": curr_cell["perimeter"]},
+                {
+                    "name": "centroidX",
+                    "value": curr_cell["centroid"][0],
+                },
+                {
+                    "name": "centroidY",
+                    "value": curr_cell["centroid"][1],
+                },
+            ],
+        },
+    }
+    return curr_cell
 
 
 def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
@@ -687,11 +735,9 @@ def shapely_polygon_to_geojson(
 
 def load_roi_polygons(
     roi_geojson_path: str, group_by_class: bool = False
-) -> (
-    shapely.STRtree
-    | tuple[shapely.STRtree, dict[str, list[shapely.Polygon]]]
-    | None
-):
+) -> shapely.STRtree | tuple[
+    shapely.STRtree, dict[str, list[shapely.Polygon]]
+] | None:
     """
     Load ROI polygons from a GeoJSON file (FeatureCollection).
 
@@ -1081,7 +1127,7 @@ def main(args):
     if model_config.cell_types:
         if len(model_config.cell_types) != n_classes - 1:
             raise ValueError(
-                f"Number of labels ({len(model_config.cell_types)}) does not match number of classes ({n_classes})"
+                f"Number of labels ({len(model_config.cell_types)}) does not match number of classes ({n_classes - 1})"
             )
         logger.info(f"Using labels: {model_config.cell_types}")
         labels = model_config.cell_types
@@ -1159,7 +1205,7 @@ def main(args):
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
         while not pp.polygons.empty():
-            polygons.extend(pp.polygons.get())
+            polygons.extend([to_geojson_polygon(x) for x in pp.polygons.get()])
             pbar.update()
     logger.info(f"Number of detected cells: {len(polygons)}")
     logger.info(f"Number of invalid cells: {pp.n_invalid_cells.value}")
@@ -1230,7 +1276,7 @@ def main(args):
                 artefact_cnts,
                 artefact_geojson,
             ) = detect_artefacts_wsi(
-                slide=OpenSlide(args.slide_path),
+                slide=OpenSlide(slide.real_slide_path),
                 model_art_path=args.artefact_detection_model_path,
                 model_td_path=args.tissue_detection_model_path,
                 device=devices[0],
@@ -1420,7 +1466,9 @@ def main_with_args():
         "--slide_path",
         type=str,
         required=True,
-        help="Path to the test dataset directory (must contain images.npy and labels.npy).",
+        help="Path to the whole-slide image to process (e.g. .svs, .tiff; any "
+        "format supported by OpenSlide). If the slide is an HTTP/HTTPS URL, "
+        "it will be downloaded to a temporary directory (`.tmp`).",
     )
     parser.add_argument(
         "--tissue_detection_model_path",

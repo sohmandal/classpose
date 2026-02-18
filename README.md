@@ -20,6 +20,7 @@ This project:
 - WSI pipeline with tissue and optional artefact detection (GrandQC-based components in `src/classpose/grandqc/`).
 - CLI entrypoint: `classpose-predict-wsi` (also available via `python -m classpose.entrypoints.predict_wsi`).
 - QuPath integration: [qupath-extension-classpose](./qupath-extension-classpose) with UI, live logging, and auto-import.
+- [Docker](https://hub.docker.com/repository/docker/josegcpa/classpose/general)
 - [Nextflow pipeline](https://github.com/adamjtaylor/nf-classpose) implemented by [Adam Taylor](https://github.com/adamjtaylor)
 
 ## Installation
@@ -39,14 +40,13 @@ Required arguments:
 
 ```
   --model_config MODEL_CONFIG
-                        One of 'conic', 'consep', 'glysac', 'monusac', 'nucls', 'puma' or a path to a model config YAML file.
+                        One of 'conic', 'consep', 'glysac', 'monusac', 'puma' or a path to the Classpose model config.
   --slide_path SLIDE_PATH
-                        Path to the whole-slide image to process (e.g. .svs, .tiff; any
-                        format supported by OpenSlide).
+                        Path to the whole-slide image to process (e.g. .svs, .tiff; any format supported by OpenSlide). If the slide is an HTTP/HTTPS URL,
+                        it will be downloaded to a temporary directory (`.tmp`).
   --output_folder OUTPUT_FOLDER
-                        Path to save the output files (basename_cell_contours.geojson,
-                        basename_cell_centroids.geojson, basename_tissue_contours.geojson, and
-                        basename_artefact_contours.geojson).
+                        Path to save the output files (basename_cell_contours.geojson, basename_cell_centroids.geojson, basename_tissue_contours.geojson,
+                        and basename_artefact_contours.geojson).
 ```
 
 Optional arguments:
@@ -89,21 +89,23 @@ Optional arguments:
 
 **Important:**
 
-- **Tissue / artefact models:** specifying either `--tissue_detection_model_path` or
-  `--artefact_detection_model_path` will download the corresponding GrandQC models to that
-  path if they are not present. This makes use of the GrandQC models available in Zenodo
-  ([tissue model](https://zenodo.org/records/14507273) and
-  [artefact model](https://zenodo.org/records/14041538)). Please note that if you use any part of Classpose which makes use of GrandQC please follow the instructions at [here](https://github.com/cpath-ukk/grandqc/tree/main) to cite them appropriately. Similarly to Classpose, GrandQC is under a non-commercial license whose terms can be found at [here](https://github.com/cpath-ukk/grandqc/blob/main/LICENSE).
-- **Output types:** if you request `--output_type csv` or `--output_type spatialdata` (or
-  both), `--tissue_detection_model_path` **must** be provided; otherwise the CLI will error.
-- **ROI-aware densities:** when `--roi_geojson` and `--output_type` include `csv` and/or
-  `spatialdata`, densities are computed per ROI class. If `--roi_class_priority` is given,
-  it is used to resolve cells that fall into overlapping ROIs.
+- **Slide downloading:** if the slide is an HTTP/HTTPS URL, it will be downloaded to a temporary directory (`.tmp`). If the slide is hosted in HTTP rather than HTTPS, it will be downloaded only if `ALLOW_UNSAFE_REQUESTS` is set to `True`/`true`/`1`.
+- **Tissue / artefact models:** specifying either `--tissue_detection_model_path` or `--artefact_detection_model_path` will download the corresponding GrandQC models to that path if they are not present. This makes use of the GrandQC models available in Zenodo ([tissue model](https://zenodo.org/records/14507273) and [artefact model](https://zenodo.org/records/14041538)). Please note that if you use any part of Classpose which makes use of GrandQC please follow the instructions at [here](https://github.com/cpath-ukk/grandqc/tree/main) to cite them appropriately. Similarly to Classpose, GrandQC is under a non-commercial license whose terms can be found at [here](https://github.com/cpath-ukk/grandqc/blob/main/LICENSE).
+- **Output types:** if you request `--output_type csv` or `--output_type spatialdata` (or both), `--tissue_detection_model_path` **must** be provided; otherwise the CLI will error.
+- **ROI-aware densities:** when `--roi_geojson` and `--output_type` include `csv` and/or `spatialdata`, densities are computed per ROI class. If `--roi_class_priority` is given, it is used to resolve cells that fall into overlapping ROIs.
 
 Examples:
 
 ```bash
 # Using the console script (declared in pyproject.toml)
+uv run classpose-predict-wsi \
+  --model_config conic \
+  --slide_path /path/to/slide.svs \
+  --output_folder /tmp/classpose_out \
+  --output_type csv spatialdata \
+  --device mps  # or cuda:0 or cpu
+
+# If the package is installed in the current environment
 classpose-predict-wsi \
   --model_config conic \
   --slide_path /path/to/slide.svs \
@@ -116,7 +118,7 @@ python -m classpose.entrypoints.predict_wsi \
   --model_config conic \
   --slide_path /path/to/slide.svs \
   --output_folder /tmp/classpose_out \
-  --output_type csv
+  --output_type csv spatialdata
 ```
 
 Outputs include raster masks and GeoJSONs (e.g., cells, centroids, tissue; artefacts if enabled). Optionally, CSV files with cellular density statistics and/or a SpatialData Zarr store can be generated when the tissue detection model is provided.

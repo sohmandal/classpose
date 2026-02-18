@@ -17,6 +17,15 @@ from classpose.log import get_logger
 
 utils_logger = get_logger(__name__)
 
+ALLOW_UNSAFE_REQUESTS = os.getenv("ALLOW_UNSAFE_REQUESTS", "false").lower() in [
+    "true",
+    "1",
+]
+if ALLOW_UNSAFE_REQUESTS:
+    utils_logger.warning(
+        "Unsafe requests enabled. This is not recommended for production use."
+    )
+
 
 def get_default_device(
     device: str | torch.device | None = None,
@@ -388,7 +397,9 @@ def compute_stardist_oversampling_probabilities(
     return train_probs
 
 
-def download_if_unavailable(path: str, url: str) -> str:
+def download_if_unavailable(
+    path: str, url: str, description: str = "Downloading model"
+) -> str:
     """
     Downloads a file from a URL if it is not available.
 
@@ -402,15 +413,31 @@ def download_if_unavailable(path: str, url: str) -> str:
     if not os.path.exists(path):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        utils_logger.info("Downloading model %s", path)
-        response = requests.get(url, stream=True)
+        utils_logger.info("%s %s", description, path)
+        try:
+            response = requests.get(url, stream=True, verify=True)
+        except:
+            if not ALLOW_UNSAFE_REQUESTS:
+                utils_logger.error(f"Cannot download slide from {url}")
+                utils_logger.error(
+                    "Downloading using unsafe requests requires setting ALLOW_UNSAFE_REQUESTS to True"
+                )
+                raise ValueError(
+                    "Downloading using unsafe requests requires setting ALLOW_UNSAFE_REQUESTS to True"
+                )
+            utils_logger.warning(
+                "Downloading using unsafe requests. This is not recommended for production use."
+            )
+            response = requests.get(url, stream=True, verify=False)
+        total_size = int(response.headers.get("content-length", 0))
+        block_size = 8192
         with open(path, "wb") as f:
-            for chunk in tqdm(
-                response.iter_content(chunk_size=8192),
-                unit_scale=True,
-                desc="Downloading model",
-            ):
-                f.write(chunk)
+            with tqdm(
+                total=total_size, unit_scale=True, unit="B", desc=description
+            ) as pbar:
+                for chunk in response.iter_content(chunk_size=block_size):
+                    f.write(chunk)
+                    pbar.update(len(chunk))
     return path
 
 
