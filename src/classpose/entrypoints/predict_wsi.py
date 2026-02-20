@@ -303,6 +303,11 @@ class SlideLoader:
         """
         self._init_slide()
         self._get_tissue_contours()
+        if self.tissue_detection_model_path is not None and not self.tissue_cnts:
+            logger.warning("No tissue detected in slide. Skipping inference.")
+            for _ in range(self.n_none):
+                self.q.put((None, None))
+            return
         n = 0
         with tqdm(self.coords, desc="Tiles to predict: 0", position=0) as pbar:
             for coords, tile_size in pbar:

@@ -210,6 +210,15 @@ def detect_tissue_wsi(
         cv2.CHAIN_APPROX_SIMPLE,
     )
 
+    if hierarchy is None:
+        grandqc_logger.warning("No tissue contours detected in slide.")
+        empty_geojson = {"type": "FeatureCollection", "features": []}
+        filled_class_map = np.zeros_like(end_image_class_map)
+        del model
+        del preprocessing_fn
+        del slide
+        return (image, filtered_mask, filled_class_map, {}, empty_geojson, mpp_model_td)
+
     holes_idx = np.where(hierarchy[0, :, 3] != -1)[0]
     scaling_array = np.array([observed_reduction_w, observed_reduction_h])
     output_cnts = {}
