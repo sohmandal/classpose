@@ -146,6 +146,8 @@ class SlideLoader:
         self.ts = manager.Value("f", 0)
         self.mpp_x = manager.Value("f", 0)
         self.mpp_y = manager.Value("f", 0)
+        self.bounds_x = manager.Value("f", 0)
+        self.bounds_y = manager.Value("f", 0)
         self.tissue_cnts = manager.list()
         self.roi_cnts = manager.list()
 
@@ -169,6 +171,11 @@ class SlideLoader:
         self.mpp = get_slide_resolution(self.slide)
         self.mpp_x.value = self.mpp[0]
         self.mpp_y.value = self.mpp[1]
+        bounds_x = self.slide.properties.get("openslide.bounds-x")
+        bounds_y = self.slide.properties.get("openslide.bounds-y")
+        self.bounds_x.value = float(bounds_x) if bounds_x is not None else 0.0
+        self.bounds_y.value = float(bounds_y) if bounds_y is not None else 0.0
+        logger.info(f"Slide bounds offset: x={self.bounds_x.value}, y={self.bounds_y.value}")
         target_downsample = min(
             self.train_mpp / self.mpp[0], self.train_mpp / self.mpp[1]
         )
@@ -609,6 +616,40 @@ def to_geojson_polygon(curr_cell: dict) -> dict:
         },
     }
     return curr_cell
+
+
+def apply_bounds_offset_to_feature(feature: dict, bounds_x: float, bounds_y: float) -> dict:
+    """
+    Apply bounds offset to a GeoJSON Polygon feature's geometry and centroid measurements.
+    
+    Args:
+        feature: GeoJSON Feature dict with Polygon geometry
+        bounds_x: X offset from openslide.bounds-x property
+        bounds_y: Y offset from openslide.bounds-y property
+        
+    Returns:
+        Feature with shifted polygon coordinates and updated centroid measurements.
+    """
+    if not feature or "geometry" not in feature:
+        return feature
+    
+    geometry = feature["geometry"]
+    if "coordinates" not in geometry:
+        return feature
+    
+    for ring in geometry["coordinates"]:
+        for point in ring:
+            point[0] -= bounds_x
+            point[1] -= bounds_y
+    
+    if "properties" in feature and "measurements" in feature["properties"]:
+        for measurement in feature["properties"]["measurements"]:
+            if measurement["name"] == "centroidX":
+                measurement["value"] -= bounds_x
+            elif measurement["name"] == "centroidY":
+                measurement["value"] -= bounds_y
+    
+    return feature
 
 
 def deduplicate(features: list[dict], max_dist: float = 15 / 2) -> list[dict]:
@@ -1241,6 +1282,15 @@ def main(args):
         logger.info("Filtering cells based on tissue contours")
         tissue_cnts = list(slide.tissue_cnts)
         polygons = filter_cells_by_contours(polygons, tissue_cnts)
+
+        bounds_x_val = float(slide.bounds_x.value)
+        bounds_y_val = float(slide.bounds_y.value)
+        if bounds_x_val != 0 or bounds_y_val != 0:
+            tissue_cnts = [
+                shapely.affinity.translate(cnt, xoff=-bounds_x_val, yoff=-bounds_y_val)
+                for cnt in tissue_cnts
+            ]
+
         tissue_features = []
         for i, cnt in enumerate(tissue_cnts):
             tissue_features.extend(
@@ -1311,6 +1361,15 @@ def main(args):
                     if polygon is not None:
                         artefact_polygons.append(polygon)
 
+        
+        bounds_x_val = float(slide.bounds_x.value)
+        bounds_y_val = float(slide.bounds_y.value)
+        if bounds_x_val != 0 or bounds_y_val != 0:
+            artefact_polygons = [
+                shapely.affinity.translate(poly, xoff=-bounds_x_val, yoff=-bounds_y_val)
+                for poly in artefact_polygons
+            ]
+
         artefact_features = []
         for i, poly in enumerate(artefact_polygons):
             artefact_features.extend(
@@ -1339,6 +1398,15 @@ def main(args):
         )
         with open(output_folder / artefact_contours_filename, "w") as f:
             json.dump(artefact_contours_fmt, f)
+
+    bounds_x_val = float(slide.bounds_x.value)
+    bounds_y_val = float(slide.bounds_y.value)
+    if bounds_x_val != 0 or bounds_y_val != 0:
+        logger.info(f"Applying bounds offset to output coordinates: x={bounds_x_val}, y={bounds_y_val}")
+        polygons = [
+            apply_bounds_offset_to_feature(f, bounds_x_val, bounds_y_val)
+            for f in polygons
+        ]
 
     geojson_fmt = {
         "type": "FeatureCollection",
