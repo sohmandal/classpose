@@ -176,6 +176,12 @@ class SlideLoader:
         self.bounds_x.value = float(bounds_x) if bounds_x is not None else 0.0
         self.bounds_y.value = float(bounds_y) if bounds_y is not None else 0.0
         logger.info(f"Slide bounds offset: x={self.bounds_x.value}, y={self.bounds_y.value}")
+
+        if self.roi_tree is not None and (
+            self.bounds_x.value != 0 or self.bounds_y.value != 0
+        ):
+            self._align_roi_tree_to_slide_bounds()
+
         target_downsample = min(
             self.train_mpp / self.mpp[0], self.train_mpp / self.mpp[1]
         )
@@ -202,6 +208,27 @@ class SlideLoader:
         logger.info(f"Target downsample: {target_downsample}")
         logger.info(f"Slide downsample: {self.ts.value}")
         logger.info(f"Level: {self.level}")
+
+    def _align_roi_tree_to_slide_bounds(self):
+        """
+        Align ROI polygons to slide coordinates when OpenSlide bounds offsets are present.
+
+        QuPath ROI annotations are exported in coordinates relative to the displayed image 
+        origin (i.e. bounds-offset corrected). Internal OpenSlide tile coordinates are in 
+        level-0 slide space. So if needed, shift ROI polygons by +bounds offsets so 
+        ROI-based tile selection/filtering uses the same frame.
+        """
+        bounds_x_val = float(self.bounds_x.value)
+        bounds_y_val = float(self.bounds_y.value)
+        geometries = list(self.roi_tree.geometries)
+
+        logger.info(f"Applying bounds offset to ROI polygons: x={bounds_x_val}, y={bounds_y_val}")
+
+        shifted = [
+            shapely.affinity.translate(geom, xoff=bounds_x_val, yoff=bounds_y_val)
+            for geom in geometries
+        ]
+        self.roi_tree = shapely.STRtree(shifted)
 
     def _get_tissue_contours(self):
         if self.tissue_detection_model_path is not None:
