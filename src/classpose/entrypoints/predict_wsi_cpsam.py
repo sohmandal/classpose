@@ -72,6 +72,7 @@ from classpose.entrypoints.predict_wsi import (
     DEFAULT_TRAIN_MPP,
     MIN_TILE_SIZE,
     SlideLoader,
+    apply_bounds_offset_to_feature,
     deduplicate,
     filter_cells_by_artefacts,
     filter_cells_by_contours,
@@ -434,6 +435,17 @@ def main(args):
         logger.info("Filtering cells based on tissue contours")
         tissue_cnts = list(slide.tissue_cnts)
         polygons = filter_cells_by_contours(polygons, tissue_cnts)
+
+        bounds_x_val = float(slide.bounds_x.value)
+        bounds_y_val = float(slide.bounds_y.value)
+        if bounds_x_val != 0 or bounds_y_val != 0:
+            tissue_cnts = [
+                shapely.affinity.translate(
+                    cnt, xoff=-bounds_x_val, yoff=-bounds_y_val
+                )
+                for cnt in tissue_cnts
+            ]
+
         tissue_features = []
         for i, cnt in enumerate(tissue_cnts):
             tissue_features.extend(
@@ -476,7 +488,7 @@ def main(args):
                 artefact_cnts,
                 artefact_geojson,
             ) = detect_artefacts_wsi(
-                slide=OpenSlide(args.slide_path),
+                slide=OpenSlide(slide.real_slide_path),
                 model_art_path=args.artefact_detection_model_path,
                 model_td_path=args.tissue_detection_model_path,
                 device=devices[0],
@@ -508,6 +520,16 @@ def main(args):
                     if polygon is not None:
                         artefact_polygons.append(polygon)
 
+        bounds_x_val = float(slide.bounds_x.value)
+        bounds_y_val = float(slide.bounds_y.value)
+        if bounds_x_val != 0 or bounds_y_val != 0:
+            artefact_polygons = [
+                shapely.affinity.translate(
+                    poly, xoff=-bounds_x_val, yoff=-bounds_y_val
+                )
+                for poly in artefact_polygons
+            ]
+
         artefact_features = []
         for i, poly in enumerate(artefact_polygons):
             artefact_features.extend(
@@ -538,6 +560,19 @@ def main(args):
         )
         with open(output_folder / artefact_contours_filename, "w") as f:
             json.dump(artefact_contours_fmt, f)
+
+    bounds_x_val = float(slide.bounds_x.value)
+    bounds_y_val = float(slide.bounds_y.value)
+    if bounds_x_val != 0 or bounds_y_val != 0:
+        logger.info(
+            "Applying bounds offset to output coordinates: x=%s, y=%s",
+            bounds_x_val,
+            bounds_y_val,
+        )
+        polygons = [
+            apply_bounds_offset_to_feature(f, bounds_x_val, bounds_y_val)
+            for f in polygons
+        ]
 
     geojson_fmt = {
         "type": "FeatureCollection",
