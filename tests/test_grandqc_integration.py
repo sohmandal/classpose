@@ -10,7 +10,7 @@ from classpose.utils import download_if_unavailable
 
 @pytest.fixture
 def test_data_dir():
-    path = Path("/home/jose_almeida/projects/classpose/tests/data")
+    path = Path("tests/data")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
