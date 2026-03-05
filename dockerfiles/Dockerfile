@@ -31,6 +31,7 @@ RUN sh -c 'umask 000 && ulimit -n 4096 && uv sync --no-editable --frozen --no-ca
 # Set runtime environment
 WORKDIR /app
 ENV CLASSPOSE_MODEL_DIR=/models
+ENV TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor
 
 RUN chmod -R 777 $HOME
 RUN chmod -R 777 /app/uv.lock
