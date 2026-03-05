@@ -62,6 +62,7 @@ def detect_artefacts_wsi(
     mpp_model_td: int = 10,
     m_p_s_model_td: int = 512,
     min_area: int = 0,
+    apply_bounds_offset: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any], dict[str, Any]]:
     """
     Detects artefacts in a whole-slide image using GrandQC method.
@@ -85,6 +86,9 @@ def detect_artefacts_wsi(
         mpp_model_td (int): MPP for tissue detection.
         m_p_s_model_td (int): patch size for tissue detection.
         min_area (int): minimum area for tissue polygons.
+        apply_bounds_offset (bool): if True, shift artefact contours and
+        GeoJSON by OpenSlide bounds offsets, so output coordinates are 
+        relative to the displayed image origin. Defaults to False.
 
     Returns:
         tuple: artefact_mask (np.ndarray), artefact_map (np.ndarray), artefact_cnts (dict), geojson (dict)
@@ -100,7 +104,11 @@ def detect_artefacts_wsi(
         encoder_model_weights=encoder_model_weights,
         device=device,
         min_area=min_area,
+        apply_bounds_offset=False,
     )
+
+    bounds_x = float(slide.properties.get("openslide.bounds-x", 0.0))
+    bounds_y = float(slide.properties.get("openslide.bounds-y", 0.0))
 
     # Load artefact model
     model_art_path = download_if_unavailable(model_art_path, MODEL_URL_PATH)
@@ -306,6 +314,27 @@ def detect_artefacts_wsi(
         min_artifact_area,
     )
 
+    if apply_bounds_offset and (bounds_x != 0 or bounds_y != 0):
+        grandqc_logger.info(
+            "Applying bounds offset to artefact output coordinates: x=%s, y=%s",
+            bounds_x,
+            bounds_y,
+        )
+
+        for cnt in artefact_cnts.values():
+            cnt["contour"] = cnt["contour"] - np.array([bounds_x, bounds_y])
+            if cnt["holes"]:
+                cnt["holes"] = [
+                    hole - np.array([bounds_x, bounds_y]) for hole in cnt["holes"]
+                ]
+
+        for feature in geojson["features"]:
+            rings = feature["geometry"]["coordinates"]
+            feature["geometry"]["coordinates"] = [
+                [[point[0] - bounds_x, point[1] - bounds_y] for point in ring]
+                for ring in rings
+            ]
+
     del model
     del preprocessing_fn
     del slide
@@ -370,6 +399,7 @@ if __name__ == "__main__":
         model_td_path=args.model_td_path,
         min_area=args.min_area,
         device=args.device,
+        apply_bounds_offset=True,
     )
 
     # Save outputs

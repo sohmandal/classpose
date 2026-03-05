@@ -35,6 +35,7 @@ def detect_tissue_wsi(
     device: str = "cuda",
     # filtering parameters
     min_area: int = 0,
+    apply_bounds_offset: bool = False,
 ) -> tuple[Image, np.ndarray, np.ndarray, list[np.ndarray], dict[str, Any],]:
     """
     Detects tissue in a whole-slide image using a U-Net model. This is adapted
@@ -58,6 +59,9 @@ def detect_tissue_wsi(
         device (str, optional): device to run the model on. Defaults to "cuda".
         min_area (int, optional): minimum area of the tissue polygons. Defaults
             to 0.
+        apply_bounds_offset (bool, optional): if True, shift output contours and
+        GeoJSON by OpenSlide bounds offsets, so output coordinates are relative 
+        to the displayed image origin. Defaults to False.
 
     Returns:
         tuple: tuple containing the following elements:
@@ -85,6 +89,9 @@ def detect_tissue_wsi(
     model.load_state_dict(torch.load(model_td_path, map_location="cpu"))
     model.to(device)
     model.eval()
+
+    bounds_x = float(slide.properties.get("openslide.bounds-x", 0.0))
+    bounds_y = float(slide.properties.get("openslide.bounds-y", 0.0))
 
     w_l0, h_l0, mpp, thumbnail_dimensions = extract_slide_info(
         slide, mpp_model_td
@@ -210,6 +217,15 @@ def detect_tissue_wsi(
         cv2.CHAIN_APPROX_SIMPLE,
     )
 
+    if hierarchy is None:
+        grandqc_logger.warning("No tissue contours detected in slide.")
+        empty_geojson = {"type": "FeatureCollection", "features": []}
+        filled_class_map = np.zeros_like(end_image_class_map)
+        del model
+        del preprocessing_fn
+        del slide
+        return (image, filtered_mask, filled_class_map, {}, empty_geojson, mpp_model_td)
+
     holes_idx = np.where(hierarchy[0, :, 3] != -1)[0]
     scaling_array = np.array([observed_reduction_w, observed_reduction_h])
     output_cnts = {}
@@ -255,6 +271,26 @@ def detect_tissue_wsi(
                 },
             }
         )
+
+    if apply_bounds_offset and (bounds_x != 0 or bounds_y != 0):
+        grandqc_logger.info(
+            "Applying bounds offset to tissue output coordinates: x=%s, y=%s",
+            bounds_x,
+            bounds_y,
+        )
+        for cnt in output_cnts.values():
+            cnt["contour"] = cnt["contour"] - np.array([bounds_x, bounds_y])
+            if cnt["holes"]:
+                cnt["holes"] = [
+                    hole - np.array([bounds_x, bounds_y]) for hole in cnt["holes"]
+                ]
+
+        for feature in geojson["features"]:
+            rings = feature["geometry"]["coordinates"]
+            feature["geometry"]["coordinates"] = [
+                [[point[0] - bounds_x, point[1] - bounds_y] for point in ring]
+                for ring in rings
+            ]
 
     del model
     del preprocessing_fn
@@ -313,6 +349,7 @@ if __name__ == "__main__":
         model_td_path=args.model_path,
         min_area=args.min_area,
         device=args.device,
+        apply_bounds_offset=True,
     )
 
     image.save(args.output_path + "_image.png")
