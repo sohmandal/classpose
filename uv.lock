@@ -497,7 +497,6 @@ dependencies = [
     { name = "pandas" },
     { name = "pre-commit" },
     { name = "pydantic" },
-    { name = "pytest" },
     { name = "pyyaml" },
     { name = "scikit-image" },
     { name = "scikit-learn" },
@@ -521,6 +520,11 @@ notebook = [
     { name = "notebook" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "cellpose", specifier = ">=4.0.8" },
@@ -542,7 +546,6 @@ requires-dist = [
     { name = "pandas", specifier = "<3.0.0" },
     { name = "pre-commit", specifier = ">=4.3.0" },
     { name = "pydantic", specifier = ">=2.11.9" },
-    { name = "pytest", specifier = ">=9.0.2" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "scikit-image", specifier = ">=0.25.2" },
     { name = "scikit-learn", specifier = ">=1.6.1" },
@@ -559,6 +562,9 @@ requires-dist = [
     { name = "zarr", specifier = ">=3.1.5" },
 ]
 provides-extras = ["notebook"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.2" }]
 
 [[package]]
 name = "click"

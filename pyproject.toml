@@ -21,7 +21,6 @@ dependencies = [
     "pandas<3.0.0",
     "pre-commit>=4.3.0",
     "pydantic>=2.11.9",
-    "pytest>=9.0.2",
     "pyyaml>=6.0.2",
     "scikit-image>=0.25.2",
     "scikit-learn>=1.6.1",
@@ -52,6 +51,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 package-dir = {"" = "src"}
 packages = ["classpose"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
 
 [project.scripts]
 classpose-predict-wsi = "classpose.entrypoints.predict_wsi:main_with_args"
