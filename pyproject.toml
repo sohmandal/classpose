@@ -52,6 +52,11 @@ build-backend = "setuptools.build_meta"
 package-dir = {"" = "src"}
 packages = ["classpose"]
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
 [project.scripts]
 classpose-predict-wsi = "classpose.entrypoints.predict_wsi:main_with_args"
 classpose-calculate-metrics = "classpose.entrypoints.calculate_metrics:main_with_args"
