@@ -27,6 +27,43 @@ if ALLOW_UNSAFE_REQUESTS:
     )
 
 
+GEOJSON_OUTPUT_TEMPLATES = {
+    "cell_contours": os.getenv(
+        "CLASSPOSE_CELL_CONTOURS_GEOJSON",
+        "{base_name}_cell_contours.geojson",
+    ),
+    "cell_centroids": os.getenv(
+        "CLASSPOSE_CELL_CENTROIDS_GEOJSON",
+        "{base_name}_cell_centroids.geojson",
+    ),
+    "tissue_contours": os.getenv(
+        "CLASSPOSE_TISSUE_CONTOURS_GEOJSON",
+        "{base_name}_tissue_contours.geojson",
+    ),
+    "artefact_contours": os.getenv(
+        "CLASSPOSE_ARTEFACT_CONTOURS_GEOJSON",
+        "{base_name}_artefact_contours.geojson",
+    ),
+    "roi": os.getenv(
+        "CLASSPOSE_ROI_GEOJSON",
+        "{base_name}_roi.geojson",
+    ),
+}
+
+
+def get_geojson_output_filename(output_kind: str, base_name: str) -> str:
+    template = GEOJSON_OUTPUT_TEMPLATES[output_kind]
+    return template.format(base_name=base_name)
+
+
+def get_geojson_output_path_from_prefix(
+    output_prefix: str | Path, output_kind: str) -> Path:
+    output_prefix = Path(output_prefix)
+    return output_prefix.with_name(
+        get_geojson_output_filename(output_kind, output_prefix.name)
+    )
+
+
 def get_default_device(
     device: str | torch.device | None = None,
 ) -> torch.device:
