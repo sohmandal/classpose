@@ -15,7 +15,11 @@ from classpose.grandqc.wsi_qc_helpers import (
     simulate_jpeg_compression,
 )
 from classpose.log import get_logger
-from classpose.utils import download_if_unavailable, get_device
+from classpose.utils import (
+    download_if_unavailable,
+    get_device,
+    get_geojson_output_path_from_prefix,
+)
 
 grandqc_logger = get_logger(__name__)
 
@@ -365,5 +369,10 @@ if __name__ == "__main__":
     image.save(args.output_path + "_image.png")
     cv2.imwrite(args.output_path + "_mask.png", mask * 255)
     cv2.imwrite(args.output_path + "_filled_class_map.png", filled_class_map)
-    with open(args.output_path + "_tissue_contours.geojson", "w") as f:
+    with open(
+        get_geojson_output_path_from_prefix(
+            args.output_path, "tissue_contours"
+        ),
+        "w",
+    ) as f:
         json.dump(geojson, f)

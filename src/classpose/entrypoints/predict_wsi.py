@@ -68,6 +68,7 @@ from classpose.model_configs import DEFAULT_MODEL_CONFIGS, ModelConfig
 from classpose.models import ClassposeModel
 from classpose.utils import (
     get_device,
+    get_geojson_output_filename,
     get_slide_resolution,
     download_if_unavailable,
 )
@@ -1311,10 +1312,18 @@ def main(args):
     output_folder.mkdir(parents=True, exist_ok=True)
 
     slide_basename = Path(args.slide_path).stem
-    cell_contours_filename = f"{slide_basename}_cell_contours.geojson"
-    cell_centroids_filename = f"{slide_basename}_cell_centroids.geojson"
-    tissue_contours_filename = f"{slide_basename}_tissue_contours.geojson"
-    artefact_contours_filename = f"{slide_basename}_artefact_contours.geojson"
+    cell_contours_filename = get_geojson_output_filename(
+        "cell_contours", slide_basename
+    )
+    cell_centroids_filename = get_geojson_output_filename(
+        "cell_centroids", slide_basename
+    )
+    tissue_contours_filename = get_geojson_output_filename(
+        "tissue_contours", slide_basename
+    )
+    artefact_contours_filename = get_geojson_output_filename(
+        "artefact_contours", slide_basename
+    )
 
     if args.roi_geojson:
         logger.info("Filtering cells based on ROI contours")
@@ -1671,7 +1680,11 @@ def main_with_args():
     parser.add_argument(
         "--output_folder",
         type=str,
-        help="Path to save the output files (basename_cell_contours.geojson, basename_cell_centroids.geojson, basename_tissue_contours.geojson, and basename_artefact_contours.geojson).",
+        help=(
+            "Path to save the output files "
+            "(basename_cell_contours.geojson, basename_cell_centroids.geojson, "
+            "basename_tissue_contours.geojson, basename_artefact_contours.geojson)."
+        ),
         required=True,
     )
     parser.add_argument(
