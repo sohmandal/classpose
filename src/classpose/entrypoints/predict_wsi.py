@@ -774,11 +774,12 @@ def shapely_polygon_to_geojson(
             )
         return features
 
-    coords = np.array(polygon.exterior.coords.xy).T
-    center = coords.mean(axis=1).tolist()
-    coords = coords.tolist()
-    coords.append(coords[0].copy())
-    feature_id = str(uuid.uuid4())
+    exterior = [list(pt) for pt in polygon.exterior.coords]
+    interiors = [[list(pt) for pt in ring.coords] for ring in polygon.interiors]
+    coordinates = [exterior, *interiors]
+
+    center = list(polygon.centroid.coords[0])
+    feature_id = id if id is not None else str(uuid.uuid4())
     properties = {
         "objectType": object_type,
         "isLocked": False,
@@ -803,7 +804,7 @@ def shapely_polygon_to_geojson(
             "id": feature_id,
             "geometry": {
                 "type": "Polygon",
-                "coordinates": [coords],
+                "coordinates": coordinates,
             },
             "properties": properties,
         }
