@@ -65,7 +65,10 @@ def get_geojson_output_filename(output_kind: str, base_name: str) -> str:
         str: The filename for the GeoJSON output file.
     """
     if output_kind not in GEOJSON_OUTPUT_TEMPLATES:
-        raise ValueError(f"Invalid output kind: {output_kind}")
+        valid_options = ", ".join(GEOJSON_OUTPUT_TEMPLATES.keys())
+        err = f"Invalid output kind: {output_kind}. Valid options are: {valid_options}"
+        utils_logger.error(err)
+        raise ValueError(err)
     template = GEOJSON_OUTPUT_TEMPLATES[output_kind]
     return template.format(base_name=base_name)
 
