@@ -365,5 +365,5 @@ if __name__ == "__main__":
     image.save(args.output_path + "_image.png")
     cv2.imwrite(args.output_path + "_mask.png", mask * 255)
     cv2.imwrite(args.output_path + "_filled_class_map.png", filled_class_map)
-    with open(args.output_path + "_geojson.json", "w") as f:
+    with open(args.output_path + "_tissue_contours.geojson", "w") as f:
         json.dump(geojson, f)
