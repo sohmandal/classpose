@@ -10,6 +10,7 @@ import javafx.stage.Stage;
 import qupath.ext.classpose.io.GeoJsonImporter;
 import qupath.ext.classpose.py.PythonRunner;
 import qupath.ext.classpose.util.AbstractClassposeAction;
+import qupath.ext.classpose.util.ImportConventions;
 import qupath.ext.classpose.util.Prefs;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
@@ -222,7 +223,7 @@ public class ClassposeArtefactDetectionAction extends AbstractClassposeAction {
             logStage.close();
             try {
                 // Import generated GeoJSON
-                File artefactGeo = new File(outPrefix + "_artefact_contours.geojson");
+                File artefactGeo = ImportConventions.artefactContoursFromPrefix(outPrefix);
                 var imgData = qupath.getImageData();
                 if (imgData != null && artefactGeo.exists() && artefactGeo.lastModified() >= startTs) {
                     PathObjectHierarchy hier = imgData.getHierarchy();

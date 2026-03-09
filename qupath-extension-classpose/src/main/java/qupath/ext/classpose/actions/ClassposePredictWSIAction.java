@@ -390,7 +390,10 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
             // If ROI mode enabled, export selected annotations to GeoJSON and pass to Python
             if (cbROI.isSelected()) {
                 try {
-                    File roiFile = ImportConventions.roiGeoJSON(new File(tfOut.getText().trim()), slidePath);
+                    File roiFile = ImportConventions.roiGeoJSON(
+                        new File(tfOut.getText().trim()),
+                        slidePath
+                    );
                     boolean ok = exportSelectedAnnotationsAsGeoJSON(roiFile);
                     if (!ok) {
                         showAlert("ROI mode enabled but no valid polygon annotations are selected.");
