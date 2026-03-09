@@ -488,7 +488,7 @@ def main(args):
                 artefact_cnts,
                 artefact_geojson,
             ) = detect_artefacts_wsi(
-                slide=OpenSlide(slide.real_slide_path),
+                slide=OpenSlide(slide.get_real_slide_path()),
                 model_art_path=args.artefact_detection_model_path,
                 model_td_path=args.tissue_detection_model_path,
                 device=devices[0],
