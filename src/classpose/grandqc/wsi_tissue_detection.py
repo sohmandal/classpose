@@ -253,13 +253,23 @@ def detect_tissue_wsi(
     for idx, cnt in output_cnts.items():
         coords = cnt["contour"].tolist()
         coords.append(coords[0])
+
+        hole_rings = []
+        for hole in cnt["holes"]:
+            hole_coords = hole.tolist()
+            if len(hole_coords) < 4:
+                continue
+            if hole_coords[0] != hole_coords[-1]:
+                hole_coords.append(hole_coords[0])
+            hole_rings.append(hole_coords)
+
         geojson["features"].append(
             {
                 "type": "Feature",
                 "id": str(uuid.uuid4()),
                 "geometry": {
                     "type": "Polygon",
-                    "coordinates": [coords],
+                    "coordinates": [coords, *hole_rings],
                 },
                 "properties": {
                     "objectType": "annotation",
