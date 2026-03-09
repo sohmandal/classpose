@@ -27,6 +27,73 @@ if ALLOW_UNSAFE_REQUESTS:
     )
 
 
+GEOJSON_OUTPUT_TEMPLATES = {
+    "cell_contours": os.getenv(
+        "CLASSPOSE_CELL_CONTOURS_GEOJSON",
+        "{base_name}_cell_contours.geojson",
+    ),
+    "cell_centroids": os.getenv(
+        "CLASSPOSE_CELL_CENTROIDS_GEOJSON",
+        "{base_name}_cell_centroids.geojson",
+    ),
+    "tissue_contours": os.getenv(
+        "CLASSPOSE_TISSUE_CONTOURS_GEOJSON",
+        "{base_name}_tissue_contours.geojson",
+    ),
+    "artefact_contours": os.getenv(
+        "CLASSPOSE_ARTEFACT_CONTOURS_GEOJSON",
+        "{base_name}_artefact_contours.geojson",
+    ),
+    "roi": os.getenv(
+        "CLASSPOSE_ROI_GEOJSON",
+        "{base_name}_roi.geojson",
+    ),
+}
+
+
+def get_geojson_output_filename(output_kind: str, base_name: str) -> str:
+    """
+    Get the filename for a GeoJSON output file.
+
+    The output_kind must be one of the keys in ``GEOJSON_OUTPUT_TEMPLATES``.
+
+    Args:
+        output_kind (str): The kind of output (e.g., "cell_contours", "cell_centroids").
+        base_name (str): The base name of the file.
+
+    Returns:
+        str: The filename for the GeoJSON output file.
+    """
+    if output_kind not in GEOJSON_OUTPUT_TEMPLATES:
+        valid_options = ", ".join(GEOJSON_OUTPUT_TEMPLATES.keys())
+        err = f"Invalid output kind: {output_kind}. Valid options are: {valid_options}"
+        utils_logger.error(err)
+        raise ValueError(err)
+    template = GEOJSON_OUTPUT_TEMPLATES[output_kind]
+    return template.format(base_name=base_name)
+
+
+def get_geojson_output_path_from_prefix(
+    output_prefix: str | Path, output_kind: str
+) -> Path:
+    """
+    Get the path for a GeoJSON output file from a prefix.
+
+    The output_kind must be one of the keys in ``GEOJSON_OUTPUT_TEMPLATES``.
+
+    Args:
+        output_prefix (str | Path): The prefix of the output file.
+        output_kind (str): The kind of output (e.g., "cell_contours", "cell_centroids").
+
+    Returns:
+        Path: The path for the GeoJSON output file.
+    """
+    output_prefix = Path(output_prefix)
+    return output_prefix.with_name(
+        get_geojson_output_filename(output_kind, output_prefix.name)
+    )
+
+
 def get_default_device(
     device: str | torch.device | None = None,
 ) -> torch.device:

@@ -82,7 +82,10 @@ from classpose.entrypoints.predict_wsi import (
 )
 from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.log import get_logger
-from classpose.utils import get_device
+from classpose.utils import (
+    get_device,
+    get_geojson_output_filename,
+)
 
 logger = get_logger("classpose")
 
@@ -420,10 +423,18 @@ def main(args):
     output_folder.mkdir(parents=True, exist_ok=True)
 
     slide_basename = Path(args.slide_path).stem
-    cell_contours_filename = f"{slide_basename}_cell_contours.geojson"
-    cell_centroids_filename = f"{slide_basename}_cell_centroids.geojson"
-    tissue_contours_filename = f"{slide_basename}_tissue_contours.geojson"
-    artefact_contours_filename = f"{slide_basename}_artefact_contours.geojson"
+    cell_contours_filename = get_geojson_output_filename(
+        "cell_contours", slide_basename
+    )
+    cell_centroids_filename = get_geojson_output_filename(
+        "cell_centroids", slide_basename
+    )
+    tissue_contours_filename = get_geojson_output_filename(
+        "tissue_contours", slide_basename
+    )
+    artefact_contours_filename = get_geojson_output_filename(
+        "artefact_contours", slide_basename
+    )
 
     if args.roi_geojson:
         logger.info("Filtering cells based on ROI contours")
@@ -488,7 +499,7 @@ def main(args):
                 artefact_cnts,
                 artefact_geojson,
             ) = detect_artefacts_wsi(
-                slide=OpenSlide(slide.real_slide_path),
+                slide=OpenSlide(slide.get_real_slide_path()),
                 model_art_path=args.artefact_detection_model_path,
                 model_td_path=args.tissue_detection_model_path,
                 device=devices[0],
@@ -799,7 +810,11 @@ def main_with_args():
     parser.add_argument(
         "--output_folder",
         type=str,
-        help="Path to save the output files (basename_cell_contours.geojson, basename_cell_centroids.geojson, basename_tissue_contours.geojson, and basename_artefact_contours.geojson).",
+        help=(
+            "Path to save the output files "
+            "(basename_cell_contours.geojson, basename_cell_centroids.geojson, "
+            "basename_tissue_contours.geojson, basename_artefact_contours.geojson)."
+        ),
         required=True,
     )
     parser.add_argument(

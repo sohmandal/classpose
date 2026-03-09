@@ -10,6 +10,7 @@ import javafx.stage.Stage;
 import qupath.ext.classpose.io.GeoJsonImporter;
 import qupath.ext.classpose.py.PythonRunner;
 import qupath.ext.classpose.util.AbstractClassposeAction;
+import qupath.ext.classpose.util.ImportConventions;
 import qupath.ext.classpose.util.Prefs;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
@@ -212,7 +213,7 @@ public class ClassposeTissueDetectionAction extends AbstractClassposeAction {
             logStage.close();
             try {
                 // Import generated GeoJSON
-                File geojson = new File(outPrefix + "_geojson.json");
+                File geojson = ImportConventions.tissueContoursFromPrefix(outPrefix);
                 var imgData = qupath.getImageData();
                 if (imgData != null && geojson.exists() && geojson.lastModified() >= startTs) {
                     PathObjectHierarchy hier = imgData.getHierarchy();

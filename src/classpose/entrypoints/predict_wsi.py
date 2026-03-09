@@ -68,6 +68,7 @@ from classpose.model_configs import DEFAULT_MODEL_CONFIGS, ModelConfig
 from classpose.models import ClassposeModel
 from classpose.utils import (
     get_device,
+    get_geojson_output_filename,
     get_slide_resolution,
     download_if_unavailable,
 )
@@ -154,20 +155,32 @@ class SlideLoader:
         self.p = tmproc.Process(target=self.fill_queue)
         self.p.start()
 
-    def _init_slide(self):
+    def get_real_slide_path(self) -> str:
+        """
+        Resolve the local path OpenSlide should read from.
+        """
+        real_slide_path = getattr(self, "real_slide_path", None)
+        if real_slide_path is not None:
+            return real_slide_path
+
         if self.slide_path.startswith("http"):
             slide_name = self.slide_path.split("/")[-1].split("?")[0]
-            self.real_slide_path = f".tmp/{slide_name}"
+            real_slide_path = f".tmp/{slide_name}"
             logger.info(
-                f"Downloading slide from {self.slide_path} to {self.real_slide_path}"
+                f"Downloading slide from {self.slide_path} to {real_slide_path}"
             )
             download_if_unavailable(
-                self.real_slide_path, self.slide_path, "Downloading slide data"
+                real_slide_path, self.slide_path, "Downloading slide data"
             )
-            self.downloaded_slide = self.real_slide_path
+            self.downloaded_slide = real_slide_path
         else:
-            self.real_slide_path = self.slide_path
-        self.slide = OpenSlide(self.real_slide_path)
+            real_slide_path = self.slide_path
+
+        self.real_slide_path = real_slide_path
+        return self.real_slide_path
+
+    def _init_slide(self):
+        self.slide = OpenSlide(self.get_real_slide_path())
         self.mpp = get_slide_resolution(self.slide)
         self.mpp_x.value = self.mpp[0]
         self.mpp_y.value = self.mpp[1]
@@ -234,7 +247,7 @@ class SlideLoader:
         if self.tissue_detection_model_path is not None:
             logger.info("Detecting tissue contours using GrandQC")
             _, _, _, tissue_cnts, _, _ = detect_tissue_wsi(
-                slide=OpenSlide(self.real_slide_path),
+                slide=OpenSlide(self.get_real_slide_path()),
                 model_td_path=self.tissue_detection_model_path,
                 min_area=self.min_area,
                 device=self.device,
@@ -774,11 +787,12 @@ def shapely_polygon_to_geojson(
             )
         return features
 
-    coords = np.array(polygon.exterior.coords.xy).T
-    center = coords.mean(axis=1).tolist()
-    coords = coords.tolist()
-    coords.append(coords[0].copy())
-    feature_id = str(uuid.uuid4())
+    exterior = [list(pt) for pt in polygon.exterior.coords]
+    interiors = [[list(pt) for pt in ring.coords] for ring in polygon.interiors]
+    coordinates = [exterior, *interiors]
+
+    center = list(polygon.centroid.coords[0])
+    feature_id = id if id is not None else str(uuid.uuid4())
     properties = {
         "objectType": object_type,
         "isLocked": False,
@@ -803,7 +817,7 @@ def shapely_polygon_to_geojson(
             "id": feature_id,
             "geometry": {
                 "type": "Polygon",
-                "coordinates": [coords],
+                "coordinates": coordinates,
             },
             "properties": properties,
         }
@@ -1277,7 +1291,6 @@ def main(args):
             bf16=args.bf16,
         )
     pp.p.join()
-    slide.close()
 
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
@@ -1289,6 +1302,7 @@ def main(args):
     if len(polygons) == 0:
         logger.warning("No cells detected")
         logger.info("Exiting")
+        slide.close()
         return
 
     logger.info("Creating GeoJSON file")
@@ -1298,10 +1312,18 @@ def main(args):
     output_folder.mkdir(parents=True, exist_ok=True)
 
     slide_basename = Path(args.slide_path).stem
-    cell_contours_filename = f"{slide_basename}_cell_contours.geojson"
-    cell_centroids_filename = f"{slide_basename}_cell_centroids.geojson"
-    tissue_contours_filename = f"{slide_basename}_tissue_contours.geojson"
-    artefact_contours_filename = f"{slide_basename}_artefact_contours.geojson"
+    cell_contours_filename = get_geojson_output_filename(
+        "cell_contours", slide_basename
+    )
+    cell_centroids_filename = get_geojson_output_filename(
+        "cell_centroids", slide_basename
+    )
+    tissue_contours_filename = get_geojson_output_filename(
+        "tissue_contours", slide_basename
+    )
+    artefact_contours_filename = get_geojson_output_filename(
+        "artefact_contours", slide_basename
+    )
 
     if args.roi_geojson:
         logger.info("Filtering cells based on ROI contours")
@@ -1362,7 +1384,7 @@ def main(args):
                 artefact_cnts,
                 artefact_geojson,
             ) = detect_artefacts_wsi(
-                slide=OpenSlide(slide.real_slide_path),
+                slide=OpenSlide(slide.get_real_slide_path()),
                 model_art_path=args.artefact_detection_model_path,
                 model_td_path=args.tissue_detection_model_path,
                 device=devices[0],
@@ -1555,6 +1577,8 @@ def main(args):
             roi_geojson_path=args.roi_geojson,
         )
 
+    slide.close()
+
 
 def main_with_args():
     parser = argparse.ArgumentParser(description="Run Classpose WSI inference.")
@@ -1656,7 +1680,11 @@ def main_with_args():
     parser.add_argument(
         "--output_folder",
         type=str,
-        help="Path to save the output files (basename_cell_contours.geojson, basename_cell_centroids.geojson, basename_tissue_contours.geojson, and basename_artefact_contours.geojson).",
+        help=(
+            "Path to save the output files "
+            "(basename_cell_contours.geojson, basename_cell_centroids.geojson, "
+            "basename_tissue_contours.geojson, basename_artefact_contours.geojson)."
+        ),
         required=True,
     )
     parser.add_argument(
