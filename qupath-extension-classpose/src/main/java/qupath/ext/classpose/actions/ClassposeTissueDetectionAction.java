@@ -212,7 +212,7 @@ public class ClassposeTissueDetectionAction extends AbstractClassposeAction {
             logStage.close();
             try {
                 // Import generated GeoJSON
-                File geojson = new File(outPrefix + "_geojson.json");
+                File geojson = new File(outPrefix + "_tissue_contours.geojson");
                 var imgData = qupath.getImageData();
                 if (imgData != null && geojson.exists() && geojson.lastModified() >= startTs) {
                     PathObjectHierarchy hier = imgData.getHierarchy();
