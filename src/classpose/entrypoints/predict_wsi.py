@@ -154,20 +154,32 @@ class SlideLoader:
         self.p = tmproc.Process(target=self.fill_queue)
         self.p.start()
 
-    def _init_slide(self):
+    def get_real_slide_path(self) -> str:
+        """
+        Resolve the local path OpenSlide should read from.
+        """
+        real_slide_path = getattr(self, "real_slide_path", None)
+        if real_slide_path is not None:
+            return real_slide_path
+
         if self.slide_path.startswith("http"):
             slide_name = self.slide_path.split("/")[-1].split("?")[0]
-            self.real_slide_path = f".tmp/{slide_name}"
+            real_slide_path = f".tmp/{slide_name}"
             logger.info(
-                f"Downloading slide from {self.slide_path} to {self.real_slide_path}"
+                f"Downloading slide from {self.slide_path} to {real_slide_path}"
             )
             download_if_unavailable(
-                self.real_slide_path, self.slide_path, "Downloading slide data"
+                real_slide_path, self.slide_path, "Downloading slide data"
             )
-            self.downloaded_slide = self.real_slide_path
+            self.downloaded_slide = real_slide_path
         else:
-            self.real_slide_path = self.slide_path
-        self.slide = OpenSlide(self.real_slide_path)
+            real_slide_path = self.slide_path
+
+        self.real_slide_path = real_slide_path
+        return self.real_slide_path
+
+    def _init_slide(self):
+        self.slide = OpenSlide(self.get_real_slide_path())
         self.mpp = get_slide_resolution(self.slide)
         self.mpp_x.value = self.mpp[0]
         self.mpp_y.value = self.mpp[1]
@@ -234,7 +246,7 @@ class SlideLoader:
         if self.tissue_detection_model_path is not None:
             logger.info("Detecting tissue contours using GrandQC")
             _, _, _, tissue_cnts, _, _ = detect_tissue_wsi(
-                slide=OpenSlide(self.real_slide_path),
+                slide=OpenSlide(self.get_real_slide_path()),
                 model_td_path=self.tissue_detection_model_path,
                 min_area=self.min_area,
                 device=self.device,
@@ -1278,7 +1290,6 @@ def main(args):
             bf16=args.bf16,
         )
     pp.p.join()
-    slide.close()
 
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
@@ -1290,6 +1301,7 @@ def main(args):
     if len(polygons) == 0:
         logger.warning("No cells detected")
         logger.info("Exiting")
+        slide.close()
         return
 
     logger.info("Creating GeoJSON file")
@@ -1363,7 +1375,7 @@ def main(args):
                 artefact_cnts,
                 artefact_geojson,
             ) = detect_artefacts_wsi(
-                slide=OpenSlide(slide.real_slide_path),
+                slide=OpenSlide(slide.get_real_slide_path()),
                 model_art_path=args.artefact_detection_model_path,
                 model_td_path=args.tissue_detection_model_path,
                 device=devices[0],
@@ -1555,6 +1567,8 @@ def main(args):
             n_cells=len(polygons),
             roi_geojson_path=args.roi_geojson,
         )
+
+    slide.close()
 
 
 def main_with_args():
