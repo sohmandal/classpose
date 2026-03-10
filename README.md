@@ -22,7 +22,7 @@ This project:
 - [QuPath integration](./qupath-extension-classpose) with UI, live logging, and auto-import.
 - [Docker](https://hub.docker.com/repository/docker/josegcpa/classpose/general)
 - [Nextflow pipeline](https://github.com/adamjtaylor/nf-classpose) implemented by [Adam Taylor](https://github.com/adamjtaylor)
-- CZI reader ([`CZISlide`](./src/classpose/wsi_utils.py)) using the [official library from Zeiss](https://github.com/ZEISS/pylibczirw/). This enables Classpose to interact with JPEG XR-compressed files (currently unsupported by OpenSlide) using an interface identical to that of OpenSlide. **Note:** this is experimental and has not been extensively tested.
+- CZI reader ([`CZISlide`](./src/classpose/wsi_utils.py)) using the [official library from Zeiss](https://github.com/ZEISS/pylibczirw/). This enables Classpose to interact with JPEG XR-compressed files (currently unsupported by OpenSlide) using an interface identical to that of OpenSlide. Triggering the use of `CZISlide` requires setting the environment variable `WSI_READER=czi-zeiss` (the default value is `"openslide"`). **Note:** this is experimental and has not been extensively tested.
 
 ## Installation
 
