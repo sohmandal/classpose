@@ -76,7 +76,6 @@ def test_predict_wsi_integration(small_region_svs, output_dir):
     basename = small_region_svs.stem
     assert (output_dir / f"{basename}_cell_contours.geojson").exists()
     assert (output_dir / f"{basename}_cell_centroids.geojson").exists()
-
     with open(output_dir / f"{basename}_cell_contours.geojson") as f:
         data = json.load(f)
         assert data["type"] == "FeatureCollection"
