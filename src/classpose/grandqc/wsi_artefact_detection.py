@@ -23,6 +23,8 @@ from classpose.utils import (
     get_device,
     get_geojson_output_path_from_prefix,
 )
+from classpose.wsi_utils import CZISlide
+from classpose import WSIReader
 
 grandqc_logger = get_logger(__name__)
 
@@ -53,7 +55,7 @@ ARTIFACT_CLASS_MAPPING = {
 
 
 def detect_artefacts_wsi(
-    slide: OpenSlide,
+    slide: OpenSlide | CZISlide,
     # artefact detection model parameters
     model_art_path: str = "./models/artefact_detection/GrandQC_MPP1.pth",
     mpp_model_art: float = 1.0,
@@ -71,15 +73,15 @@ def detect_artefacts_wsi(
     """
     Detects artefacts in a whole-slide image using GrandQC method.
     First performs tissue detection, then artefact segmentation on tissue areas.
-    
-    Please note that if you use any part of Classpose which makes use of GrandQC please 
-    follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main to cite them 
-    appropriately. Similarly to Classpose, GrandQC is under a non-commercial license 
+
+    Please note that if you use any part of Classpose which makes use of GrandQC please
+    follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main to cite them
+    appropriately. Similarly to Classpose, GrandQC is under a non-commercial license
     whose terms can be found at https://github.com/cpath-ukk/grandqc/blob/main/LICENSE.
 
 
     Args:
-        slide (OpenSlide): slide to detect artefacts in.
+        slide (OpenSlide | CZISlide): slide to detect artefacts in.
         model_art_path (str): path to the artefact detection model.
         mpp_model_art (float): MPP of the artefact detection model (default 1.0).
         m_p_s_model_art (int): patch size of the artefact model.
@@ -91,7 +93,7 @@ def detect_artefacts_wsi(
         m_p_s_model_td (int): patch size for tissue detection.
         min_area (int): minimum area for tissue polygons.
         apply_bounds_offset (bool): if True, shift artefact contours and
-        GeoJSON by OpenSlide bounds offsets, so output coordinates are 
+        GeoJSON by OpenSlide bounds offsets, so output coordinates are
         relative to the displayed image origin. Defaults to False.
 
     Returns:
@@ -329,7 +331,8 @@ def detect_artefacts_wsi(
             cnt["contour"] = cnt["contour"] - np.array([bounds_x, bounds_y])
             if cnt["holes"]:
                 cnt["holes"] = [
-                    hole - np.array([bounds_x, bounds_y]) for hole in cnt["holes"]
+                    hole - np.array([bounds_x, bounds_y])
+                    for hole in cnt["holes"]
                 ]
 
         for feature in geojson["features"]:
@@ -395,7 +398,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args.device = get_device(args.device)[0]
 
-    slide = OpenSlide(args.slide_path)
+    slide = WSIReader(args.slide_path)
     artefact_mask, artefact_map, artefact_cnts, geojson = detect_artefacts_wsi(
         slide,
         mpp_model_art=args.mpp_model_art,

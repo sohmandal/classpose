@@ -304,11 +304,11 @@ def flatten_geojson_properties(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
         for measure in ["area", "perimeter", "centroidX", "centroidY"]:
             gdf[measure] = parsed_measurements.apply(
-                lambda x: next(
-                    (m["value"] for m in x if m["name"] == measure), None
+                lambda x: (
+                    next((m["value"] for m in x if m["name"] == measure), None)
+                    if isinstance(x, list)
+                    else None
                 )
-                if isinstance(x, list)
-                else None
             )
         gdf = gdf.drop(columns=["measurements"])
 

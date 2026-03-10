@@ -78,6 +78,7 @@ from classpose.entrypoints.outputs import (
     create_valid_polygon,
     map_cells_to_roi_classes,
 )
+from classpose import WSIReader
 
 logger = get_logger("classpose")
 
@@ -180,7 +181,7 @@ class SlideLoader:
         return self.real_slide_path
 
     def _init_slide(self):
-        self.slide = OpenSlide(self.get_real_slide_path())
+        self.slide = WSIReader(self.get_real_slide_path())
         self.mpp = get_slide_resolution(self.slide)
         self.mpp_x.value = self.mpp[0]
         self.mpp_y.value = self.mpp[1]
@@ -188,7 +189,9 @@ class SlideLoader:
         bounds_y = self.slide.properties.get("openslide.bounds-y")
         self.bounds_x.value = float(bounds_x) if bounds_x is not None else 0.0
         self.bounds_y.value = float(bounds_y) if bounds_y is not None else 0.0
-        logger.info(f"Slide bounds offset: x={self.bounds_x.value}, y={self.bounds_y.value}")
+        logger.info(
+            f"Slide bounds offset: x={self.bounds_x.value}, y={self.bounds_y.value}"
+        )
 
         if self.roi_tree is not None and (
             self.bounds_x.value != 0 or self.bounds_y.value != 0
@@ -226,19 +229,23 @@ class SlideLoader:
         """
         Align ROI polygons to slide coordinates when OpenSlide bounds offsets are present.
 
-        QuPath ROI annotations are exported in coordinates relative to the displayed image 
-        origin (i.e. bounds-offset corrected). Internal OpenSlide tile coordinates are in 
-        level-0 slide space. So if needed, shift ROI polygons by +bounds offsets so 
+        QuPath ROI annotations are exported in coordinates relative to the displayed image
+        origin (i.e. bounds-offset corrected). Internal OpenSlide tile coordinates are in
+        level-0 slide space. So if needed, shift ROI polygons by +bounds offsets so
         ROI-based tile selection/filtering uses the same frame.
         """
         bounds_x_val = float(self.bounds_x.value)
         bounds_y_val = float(self.bounds_y.value)
         geometries = list(self.roi_tree.geometries)
 
-        logger.info(f"Applying bounds offset to ROI polygons: x={bounds_x_val}, y={bounds_y_val}")
+        logger.info(
+            f"Applying bounds offset to ROI polygons: x={bounds_x_val}, y={bounds_y_val}"
+        )
 
         shifted = [
-            shapely.affinity.translate(geom, xoff=bounds_x_val, yoff=bounds_y_val)
+            shapely.affinity.translate(
+                geom, xoff=bounds_x_val, yoff=bounds_y_val
+            )
             for geom in geometries
         ]
         self.roi_tree = shapely.STRtree(shifted)
@@ -247,7 +254,7 @@ class SlideLoader:
         if self.tissue_detection_model_path is not None:
             logger.info("Detecting tissue contours using GrandQC")
             _, _, _, tissue_cnts, _, _ = detect_tissue_wsi(
-                slide=OpenSlide(self.get_real_slide_path()),
+                slide=WSIReader(self.get_real_slide_path()),
                 model_td_path=self.tissue_detection_model_path,
                 min_area=self.min_area,
                 device=self.device,
@@ -350,7 +357,10 @@ class SlideLoader:
         """
         self._init_slide()
         self._get_tissue_contours()
-        if self.tissue_detection_model_path is not None and not self.tissue_cnts:
+        if (
+            self.tissue_detection_model_path is not None
+            and not self.tissue_cnts
+        ):
             logger.warning("No tissue detected in slide. Skipping inference.")
             for _ in range(self.n_none):
                 self.q.put((None, None))
@@ -658,41 +668,42 @@ def to_geojson_polygon(curr_cell: dict) -> dict:
     return curr_cell
 
 
-def apply_bounds_offset_to_feature(feature: dict, bounds_x: float, bounds_y: float) -> dict:
+def apply_bounds_offset_to_feature(
+    feature: dict, bounds_x: float, bounds_y: float
+) -> dict:
     """
     Apply bounds offset to a GeoJSON Polygon feature's geometry and centroid measurements.
-    
+
     Args:
         feature: GeoJSON Feature dict with Polygon geometry
         bounds_x: X offset from openslide.bounds-x property
         bounds_y: Y offset from openslide.bounds-y property
-        
+
     Returns:
         Feature with shifted polygon coordinates and updated centroid measurements.
     """
     if not feature or "geometry" not in feature:
         return feature
-    
+
     geometry = feature["geometry"]
     if "coordinates" not in geometry:
         return feature
-    
+
     shifted_coordinates = []
     for ring in geometry["coordinates"]:
         shifted_ring = [
-            [point[0] - bounds_x, point[1] - bounds_y]
-            for point in ring
+            [point[0] - bounds_x, point[1] - bounds_y] for point in ring
         ]
         shifted_coordinates.append(shifted_ring)
     geometry["coordinates"] = shifted_coordinates
-    
+
     if "properties" in feature and "measurements" in feature["properties"]:
         for measurement in feature["properties"]["measurements"]:
             if measurement["name"] == "centroidX":
                 measurement["value"] -= bounds_x
             elif measurement["name"] == "centroidY":
                 measurement["value"] -= bounds_y
-    
+
     return feature
 
 
@@ -826,9 +837,11 @@ def shapely_polygon_to_geojson(
 
 def load_roi_polygons(
     roi_geojson_path: str, group_by_class: bool = False
-) -> shapely.STRtree | tuple[
-    shapely.STRtree, dict[str, list[shapely.Polygon]]
-] | None:
+) -> (
+    shapely.STRtree
+    | tuple[shapely.STRtree, dict[str, list[shapely.Polygon]]]
+    | None
+):
     """
     Load ROI polygons from a GeoJSON file (FeatureCollection).
 
@@ -1340,7 +1353,9 @@ def main(args):
         bounds_y_val = float(slide.bounds_y.value)
         if bounds_x_val != 0 or bounds_y_val != 0:
             tissue_cnts = [
-                shapely.affinity.translate(cnt, xoff=-bounds_x_val, yoff=-bounds_y_val)
+                shapely.affinity.translate(
+                    cnt, xoff=-bounds_x_val, yoff=-bounds_y_val
+                )
                 for cnt in tissue_cnts
             ]
 
@@ -1384,7 +1399,7 @@ def main(args):
                 artefact_cnts,
                 artefact_geojson,
             ) = detect_artefacts_wsi(
-                slide=OpenSlide(slide.get_real_slide_path()),
+                slide=WSIReader(slide.get_real_slide_path()),
                 model_art_path=args.artefact_detection_model_path,
                 model_td_path=args.tissue_detection_model_path,
                 device=devices[0],
@@ -1414,12 +1429,13 @@ def main(args):
                     if polygon is not None:
                         artefact_polygons.append(polygon)
 
-        
         bounds_x_val = float(slide.bounds_x.value)
         bounds_y_val = float(slide.bounds_y.value)
         if bounds_x_val != 0 or bounds_y_val != 0:
             artefact_polygons = [
-                shapely.affinity.translate(poly, xoff=-bounds_x_val, yoff=-bounds_y_val)
+                shapely.affinity.translate(
+                    poly, xoff=-bounds_x_val, yoff=-bounds_y_val
+                )
                 for poly in artefact_polygons
             ]
 
@@ -1455,7 +1471,9 @@ def main(args):
     bounds_x_val = float(slide.bounds_x.value)
     bounds_y_val = float(slide.bounds_y.value)
     if bounds_x_val != 0 or bounds_y_val != 0:
-        logger.info(f"Applying bounds offset to output coordinates: x={bounds_x_val}, y={bounds_y_val}")
+        logger.info(
+            f"Applying bounds offset to output coordinates: x={bounds_x_val}, y={bounds_y_val}"
+        )
         polygons = [
             apply_bounds_offset_to_feature(f, bounds_x_val, bounds_y_val)
             for f in polygons
