@@ -130,7 +130,7 @@ class CZISlide:
             int: Best level.
         """
         for i, ds in enumerate(self.level_downsamples):
-            if downsample < ds:
+            if downsample <= ds:
                 return i
         return i
 
