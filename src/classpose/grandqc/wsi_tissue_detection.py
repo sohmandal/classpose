@@ -1,7 +1,6 @@
 import json
-import os
 import uuid
-from typing import Any
+from typing import Any, Union
 
 import cv2
 import numpy as np
@@ -21,7 +20,6 @@ from classpose.utils import (
     get_device,
     get_geojson_output_path_from_prefix,
 )
-from classpose.wsi_utils import CZISlide
 from classpose import WSIReader
 
 grandqc_logger = get_logger(__name__)
@@ -32,7 +30,7 @@ MODEL_URL_PATH = (
 
 
 def detect_tissue_wsi(
-    slide: OpenSlide | CZISlide,
+    slide: Union[OpenSlide, "CZISlide"],
     # tissue detection model parameters
     model_td_path: str = "./models/tissue_detection/Tissue_Detection_MPP10.pth",
     mpp_model_td: int = 10,

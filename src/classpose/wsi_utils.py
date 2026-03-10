@@ -1,8 +1,6 @@
-import os
 import numpy as np
 from PIL import Image
 from pylibCZIrw import czi as pyczi
-from openslide import OpenSlide
 
 from classpose.log import get_logger
 
@@ -142,33 +140,3 @@ class CZISlide:
 
     def __exit__(self, *args):
         self.close()
-
-
-WSI_READERS = {
-    "czi-zeiss": CZISlide,
-    "openslide": OpenSlide,
-}
-
-
-def get_wsi_reader(reader_str: str) -> CZISlide:
-    """
-    Get a WSI reader for the given path.
-
-    Args:
-        reader_str (str): path to the WSI file.
-
-    Returns:
-        CZISlide: WSI reader.
-    """
-    if reader_str not in WSI_READERS:
-        readers = list(WSI_READERS.keys())
-        err = f"Reader {reader_str} not supported. "
-        err += f"Should be one of {readers}"
-        logger.error(err)
-        raise ValueError(err)
-    return WSI_READERS[reader_str]
-
-
-def WSIReader(*args, **kwargs):
-    reader_str = os.environ.get("WSI_READER", "openslide")
-    return get_wsi_reader(reader_str)(*args, **kwargs)

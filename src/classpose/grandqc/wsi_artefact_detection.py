@@ -1,5 +1,5 @@
 import json
-from typing import Any
+from typing import Any, Union
 
 import cv2
 import numpy as np
@@ -23,7 +23,6 @@ from classpose.utils import (
     get_device,
     get_geojson_output_path_from_prefix,
 )
-from classpose.wsi_utils import CZISlide
 from classpose import WSIReader
 
 grandqc_logger = get_logger(__name__)
@@ -55,7 +54,7 @@ ARTIFACT_CLASS_MAPPING = {
 
 
 def detect_artefacts_wsi(
-    slide: OpenSlide | CZISlide,
+    slide: Union[OpenSlide, "CZISlide"],
     # artefact detection model parameters
     model_art_path: str = "./models/artefact_detection/GrandQC_MPP1.pth",
     mpp_model_art: float = 1.0,
