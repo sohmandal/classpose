@@ -3,6 +3,8 @@ import pytest
 from pathlib import Path
 
 from classpose.utils import download_if_unavailable
+
+pytest.importorskip("pylibCZIrw")
 from classpose.wsi_utils import CZISlide
 
 
