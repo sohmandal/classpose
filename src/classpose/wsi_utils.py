@@ -41,10 +41,12 @@ class CZISlide:
             "h": bbp["Y"][1] - bbp["Y"][0],
         }
         bb = self._czi.total_bounding_box
-        bounding_rect = self._czi.scenes_bounding_rectangle[0]
+        bounding_rects = self._czi.scenes_bounding_rectangle
+        bounding_rect = bounding_rects[0]
         logger.info(f"Total bounding box: {bb}")
         logger.info(f"Scenes bounding rectangle: {bounding_rect}")
         logger.info(f"Bounding box (layer 0): {bbp}")
+        logger.info(f"Bounding rectangles: {bounding_rects}")
         self._x_min = bbp["x"]
         self._y_min = bbp["y"]
         w = bbp["w"]
