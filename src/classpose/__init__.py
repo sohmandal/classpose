@@ -17,7 +17,7 @@ def get_wsi_reader(reader_str: str):
         WSI reader class (either OpenSlide or CZISlide).
     """
     if reader_str not in WSI_READERS:
-        readers = list(WSI_READERS.keys())
+        readers = WSI_READERS
         err = f"Reader {reader_str} not supported. "
         err += f"Should be one of {readers}"
         logger.error(err)
