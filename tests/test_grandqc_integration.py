@@ -1,10 +1,10 @@
-import os
 import pytest
 import numpy as np
 from pathlib import Path
 from openslide import OpenSlide
 from classpose.grandqc.wsi_tissue_detection import detect_tissue_wsi
 from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
+from classpose import WSIReader
 from classpose.utils import download_if_unavailable
 
 
@@ -19,6 +19,14 @@ def test_data_dir():
 def jp2k_33005_svs(test_data_dir):
     path = test_data_dir / "CMU-1-JP2K-33005.svs"
     url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/CMU-1-JP2K-33005.svs"
+    download_if_unavailable(str(path), url)
+    return path
+
+
+@pytest.fixture
+def zeiss_czi(test_data_dir):
+    path = test_data_dir / "Zeiss-5-Cropped.czi"
+    url = "https://openslide.cs.cmu.edu/download/openslide-testdata/Zeiss/Zeiss-5-Cropped.czi"
     download_if_unavailable(str(path), url)
     return path
 
@@ -63,6 +71,49 @@ def test_artefact_detection_integration(jp2k_33005_svs, output_dir):
     slide = OpenSlide(str(jp2k_33005_svs))
 
     # Run artefact detection
+    results = detect_artefacts_wsi(slide=slide, device="cuda", min_area=100)
+
+    artefact_mask, artefact_map, artefact_cnts, geojson = results
+
+    assert isinstance(artefact_mask, np.ndarray)
+    assert isinstance(artefact_map, np.ndarray)
+    assert isinstance(artefact_cnts, dict)
+    assert geojson["type"] == "FeatureCollection"
+
+
+def test_tissue_detection_czi_integration(zeiss_czi, output_dir, monkeypatch):
+    """
+    Test GrandQC tissue detection with Zeiss-5-Cropped.czi using CZISlide reader.
+    """
+    assert zeiss_czi.exists(), f"Test slide {zeiss_czi} not found"
+
+    monkeypatch.setenv("WSI_READER", "czi-zeiss")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    slide = WSIReader(str(zeiss_czi))
+
+    results = detect_tissue_wsi(slide=slide, device="cpu", min_area=100)
+
+    image, mask, filled_class_map, output_cnts, geojson, mpp = results
+
+    assert image is not None
+    assert isinstance(mask, np.ndarray)
+    assert len(output_cnts) >= 0
+    assert geojson["type"] == "FeatureCollection"
+    assert mpp > 0
+
+
+def test_artefact_detection_czi_integration(zeiss_czi, output_dir, monkeypatch):
+    """
+    Test GrandQC artefact detection with Zeiss-5-Cropped.czi using CZISlide reader.
+    """
+    assert zeiss_czi.exists()
+
+    monkeypatch.setenv("WSI_READER", "czi-zeiss")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    slide = WSIReader(str(zeiss_czi))
+
     results = detect_artefacts_wsi(slide=slide, device="cuda", min_area=100)
 
     artefact_mask, artefact_map, artefact_cnts, geojson = results

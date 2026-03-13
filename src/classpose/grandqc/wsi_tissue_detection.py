@@ -1,6 +1,6 @@
 import json
 import uuid
-from typing import Any
+from typing import Any, Union
 
 import cv2
 import numpy as np
@@ -20,6 +20,7 @@ from classpose.utils import (
     get_device,
     get_geojson_output_path_from_prefix,
 )
+from classpose import WSIReader
 
 grandqc_logger = get_logger(__name__)
 
@@ -29,7 +30,7 @@ MODEL_URL_PATH = (
 
 
 def detect_tissue_wsi(
-    slide: OpenSlide,
+    slide: Union[OpenSlide, "CZISlide"],
     # tissue detection model parameters
     model_td_path: str = "./models/tissue_detection/Tissue_Detection_MPP10.pth",
     mpp_model_td: int = 10,
@@ -43,13 +44,13 @@ def detect_tissue_wsi(
 ) -> tuple[Image, np.ndarray, np.ndarray, list[np.ndarray], dict[str, Any],]:
     """
     Detects tissue in a whole-slide image using a U-Net model. This is adapted
-    from the GrandQC repository. Please note that if you use any part of Classpose 
-    which makes use of GrandQC please follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main 
-    to cite them appropriately. Similarly to Classpose, GrandQC is under a non-commercial license 
+    from the GrandQC repository. Please note that if you use any part of Classpose
+    which makes use of GrandQC please follow the instructions at https://github.com/cpath-ukk/grandqc/tree/main
+    to cite them appropriately. Similarly to Classpose, GrandQC is under a non-commercial license
     whose terms can be found at https://github.com/cpath-ukk/grandqc/blob/main/LICENSE.
 
     Args:
-        slide (OpenSlide): slide to detect tissue in.
+        slide (OpenSlide | CZISlide): slide to detect tissue in.
         model_td_path (str, optional): path to the tissue detection model.
             Defaults to "./models/tissue_detection/Tissue_Detection_MPP10.pth".
         mpp_model_td (int, optional): MPP of the tissue detection model.
@@ -64,7 +65,7 @@ def detect_tissue_wsi(
         min_area (int, optional): minimum area of the tissue polygons. Defaults
             to 0.
         apply_bounds_offset (bool, optional): if True, shift output contours and
-        GeoJSON by OpenSlide bounds offsets, so output coordinates are relative 
+        GeoJSON by OpenSlide bounds offsets, so output coordinates are relative
         to the displayed image origin. Defaults to False.
 
     Returns:
@@ -228,7 +229,14 @@ def detect_tissue_wsi(
         del model
         del preprocessing_fn
         del slide
-        return (image, filtered_mask, filled_class_map, {}, empty_geojson, mpp_model_td)
+        return (
+            image,
+            filtered_mask,
+            filled_class_map,
+            {},
+            empty_geojson,
+            mpp_model_td,
+        )
 
     holes_idx = np.where(hierarchy[0, :, 3] != -1)[0]
     scaling_array = np.array([observed_reduction_w, observed_reduction_h])
@@ -296,7 +304,8 @@ def detect_tissue_wsi(
             cnt["contour"] = cnt["contour"] - np.array([bounds_x, bounds_y])
             if cnt["holes"]:
                 cnt["holes"] = [
-                    hole - np.array([bounds_x, bounds_y]) for hole in cnt["holes"]
+                    hole - np.array([bounds_x, bounds_y])
+                    for hole in cnt["holes"]
                 ]
 
         for feature in geojson["features"]:
@@ -357,7 +366,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args.device = get_device(args.device)[0]
 
-    slide = OpenSlide(args.slide_path)
+    slide = WSIReader(args.slide_path)
     image, mask, filled_class_map, _, geojson, mpp_model_td = detect_tissue_wsi(
         slide,
         model_td_path=args.model_path,

@@ -43,6 +43,9 @@ notebook = [
     "matplotlib>=3.10.1",
     "notebook>=7.4.0",
 ]
+czi-zeiss = [
+    "pylibczirw>=5.1.1",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]

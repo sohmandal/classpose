@@ -19,9 +19,10 @@ This project:
 - Adds a semantic head to leverage generalist Cellpose weights for classification.
 - WSI pipeline with tissue and optional artefact detection (GrandQC-based components in `src/classpose/grandqc/`).
 - CLI entrypoint: `classpose-predict-wsi` (also available via `python -m classpose.entrypoints.predict_wsi`).
-- QuPath integration: [qupath-extension-classpose](./qupath-extension-classpose) with UI, live logging, and auto-import.
+- [QuPath integration](./qupath-extension-classpose) with UI, live logging, and auto-import.
 - [Docker](https://hub.docker.com/repository/docker/josegcpa/classpose/general)
 - [Nextflow pipeline](https://github.com/adamjtaylor/nf-classpose) implemented by [Adam Taylor](https://github.com/adamjtaylor)
+- CZI reader ([`CZISlide`](./src/classpose/wsi_utils.py)) using the [official library from Zeiss](https://github.com/ZEISS/pylibczirw/). This enables Classpose to interact with JPEG XR-compressed files (currently unsupported by OpenSlide) using an interface identical to that of OpenSlide. Triggering the use of `CZISlide` requires setting the environment variable `WSI_READER=czi-zeiss` (the default value is `"openslide"`). **Note:** this is experimental and has not been extensively tested.
 
 ## Installation
 

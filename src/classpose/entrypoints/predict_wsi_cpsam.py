@@ -86,6 +86,7 @@ from classpose.utils import (
     get_device,
     get_geojson_output_filename,
 )
+from classpose import WSIReader
 
 logger = get_logger("classpose")
 
@@ -499,7 +500,7 @@ def main(args):
                 artefact_cnts,
                 artefact_geojson,
             ) = detect_artefacts_wsi(
-                slide=OpenSlide(slide.get_real_slide_path()),
+                slide=WSIReader(slide.get_real_slide_path()),
                 model_art_path=args.artefact_detection_model_path,
                 model_td_path=args.tissue_detection_model_path,
                 device=devices[0],
