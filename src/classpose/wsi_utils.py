@@ -33,23 +33,22 @@ class CZISlide:
         logger.info(f"MPP X: {mpp_x}, MPP Y: {mpp_y}")
 
         # Build level dimensions (scene 0, channel 0 by default)
-        stats = self._czi._czi_reader.GetSubBlockStats()
-        bb0 = stats.boundingBoxLayer0Only
-        bb0 = {
-            "x": bb0.x,
-            "y": bb0.y,
-            "w": bb0.w,
-            "h": bb0.h,
+        bbp = self._czi.total_bounding_box_no_pyramid
+        bbp = {
+            "x": bbp["X"][0],
+            "y": bbp["Y"][0],
+            "w": bbp["X"][1] - bbp["X"][0],
+            "h": bbp["Y"][1] - bbp["Y"][0],
         }
         bb = self._czi.total_bounding_box
         bounding_rect = self._czi.scenes_bounding_rectangle[0]
         logger.info(f"Total bounding box: {bb}")
         logger.info(f"Scenes bounding rectangle: {bounding_rect}")
-        logger.info(f"Bounding box (layer 0): {bb0}")
-        self._x_min = bb0["x"]
-        self._y_min = bb0["y"]
-        w = bb0["w"]
-        h = bb0["h"]
+        logger.info(f"Bounding box (layer 0): {bbp}")
+        self._x_min = bbp["x"]
+        self._y_min = bbp["y"]
+        w = bbp["w"]
+        h = bbp["h"]
 
         self.level_downsamples = [1, 2, 4, 8, 16]
         self.level_dimensions = [
