@@ -9,8 +9,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from cellpose import dynamics, models, utils
-from cellpose.train import _get_batch, _loss_fn_seg, _reshape_norm
-from cellpose.transforms import normalize_img, random_rotate_and_resize
+from cellpose.train import _loss_fn_seg, _reshape_norm
 from skimage import io
 from torch import nn
 from torch.utils.data import DataLoader
@@ -480,70 +479,6 @@ def _process_train_test(
         diam_test,
         normed,
     )
-
-
-def _process_single_image(args):
-    """
-    Helper function for multiprocessing - processes a single image with geometric transforms and normalization.
-
-    Args:
-        args: Tuple of (img, lbl, rescale_factor, scale_range, bsize, normalize_params)
-
-    Returns:
-        Tuple of (processed_image, processed_label)
-    """
-    img, lbl, r, scale_range, bsize, normalize_params = args
-    img_, lbl_ = random_rotate_and_resize(
-        [img], Y=[lbl], rescale=[r], scale_range=scale_range, xy=(bsize, bsize)
-    )[:2]
-    img_ = normalize_img(img_[0], **normalize_params)
-    return img_, lbl_[0]
-
-
-def _get_batch_and_augment(
-    data: list[np.ndarray] | None,
-    labels: list[np.ndarray] | None,
-    files: list[str] | None,
-    labels_files: list[str] | None,
-    kwargs: dict,
-    inds: list[int],
-    diams: np.ndarray,
-    diam_mean: float,
-    rescale: bool,
-    scale_range: list[float] | None,
-    bsize: int,
-    normalize_params: dict,
-    augment: bool,
-    augment_pipeline,
-):
-    imgs, lbls = _get_batch(
-        inds,
-        data=data,
-        labels=labels,
-        files=files,
-        labels_files=labels_files,
-        **kwargs,
-    )
-    diams = np.array([diams[i] for i in inds])
-    rsc = diams / diam_mean if rescale else np.ones(len(diams), "float32")
-    # augmentations
-    if augment:
-        if augment_pipeline is not None:
-            imgs = augment_pipeline.transform_batch(imgs)
-        # Parallelize random_rotate_and_resize and normalization
-        args_list = [
-            (imgs[i], lbls[i], rsc[i], scale_range, bsize, normalize_params)
-            for i in range(len(imgs))
-        ]
-        imgi, lbl = zip(*(_process_single_image(args) for args in args_list))
-        imgi, lbl = list(imgi), list(lbl)
-    else:
-        imgi = imgs
-        lbl = lbls
-        imgi = [normalize_img(img, **normalize_params) for img in imgi]
-    imgi = np.stack(imgi)
-    lbl = np.stack(lbl)
-    return imgi, lbl
 
 
 def seed_everything(seed: int):
