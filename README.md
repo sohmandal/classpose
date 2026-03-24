@@ -198,6 +198,11 @@ train_class_seg(
 
 For a complete training example with data loading, oversampling, and advanced options, see [`paper_experiments/run_training.py`](./paper_experiments/run_training.py).
 
+Notes:
+- Multi-GPU training is supported via `uv run torchrun --standalone --nnodes=1 --nproc_per_node=<N> paper_experiments/run_training.py ...`.
+- Resume training is supported with `--resume_checkpoint <path/to/checkpoint.train.pt>`.
+- In distributed runs, `--batch_size` is per rank and `--lr_scaling {none,sqrt}` controls optional LR scaling.
+
 ## QuPath extension
 
 The companion QuPath extension lives in `qupath-extension-classpose/` and makes Classpose directly accessible from QuPath with only a few configuration steps.
