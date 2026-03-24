@@ -14,6 +14,8 @@ DEFAULT_DATA_DIR = "../data/conic_miccai/train"
 DEFAULT_TRAIN_FRACTION = 0.8
 DEFAULT_EPOCHS = 100
 DEFAULT_BATCH_SIZE = 4
+DEFAULT_BASE_LEARNING_RATE = 5e-5
+DEFAULT_LR_SCALING = "none"
 DEFAULT_SEED = 42
 DEFAULT_OUTPUT_DIR = "models/classpose_miccai"
 DEFAULT_MAKE_SPARSE = False
@@ -49,6 +51,13 @@ def parse_args():
         type=int,
         default=DEFAULT_BATCH_SIZE,
         help="Batch size for training",
+    )
+    parser.add_argument(
+        "--lr_scaling",
+        type=str,
+        choices=["none", "sqrt"],
+        default=DEFAULT_LR_SCALING,
+        help="Distributed-only learning-rate scaling mode",
     )
     parser.add_argument(
         "--seed",
@@ -255,12 +264,28 @@ def main(args):
             context.world_size,
             context.device,
         )
+        resolved_learning_rate = DEFAULT_BASE_LEARNING_RATE
         if context.distributed:
             effective_global_batch = args.batch_size * context.world_size
             logger.info(
                 "In distributed mode, --batch_size is per-rank. Effective global batch = %s.",
                 effective_global_batch,
             )
+            if args.lr_scaling == "sqrt":
+                resolved_learning_rate = DEFAULT_BASE_LEARNING_RATE * (
+                    np.sqrt(effective_global_batch / DEFAULT_BATCH_SIZE)
+                )
+                if effective_global_batch != DEFAULT_BATCH_SIZE:
+                    logger.info(
+                        "Resolved distributed learning rate %.6g from base %.6g. ",
+                        resolved_learning_rate,
+                        DEFAULT_BASE_LEARNING_RATE,
+                    )
+            else:
+                logger.info(
+                    "Distributed learning rate scaling disabled. Using learning rate %.6g.",
+                    resolved_learning_rate,
+                )
         logger.info("-------------------------------------------")
 
         if args.oversampling_method == "stardist" and args.n_rare_classes <= 0:
@@ -437,6 +462,7 @@ def main(args):
             test_labels=test_labels,
             train_probs=train_probs,
             batch_size=args.batch_size,
+            learning_rate=resolved_learning_rate,
             n_epochs=args.epochs,
             save_path=args.output_dir,
             model_name=args.model_name,
