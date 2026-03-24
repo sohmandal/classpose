@@ -1,14 +1,20 @@
+import os
+import socket
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from classpose.dataset import (
     DistributedEpochSampler,
     SequentialDistributedSampler,
 )
+from classpose.distributed import cleanup_distributed, setup_distributed
 from classpose.train import train_class_seg
 
 
@@ -74,8 +80,93 @@ class ToyClassposeNet(nn.Module):
 
     def save_model(self, filename: str | Path):
         torch.save(self.state_dict(), filename)
-        
-        
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _run_cuda_ddp_smoke(
+    rank: int,
+    world_size: int,
+    master_port: int,
+    output_dir: str,
+):
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(master_port)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ["LOCAL_RANK"] = str(rank)
+
+    context = setup_distributed(
+        device_arg="cuda",
+        backend="nccl",
+        timeout_seconds=120,
+    )
+    try:
+        train_images, train_labels, test_images, test_labels = (
+            _make_synthetic_dataset()
+        )
+
+        train_sampler = DistributedEpochSampler(
+            dataset_length=len(train_images),
+            batch_size=2,
+            train_probs=None,
+            nimg_per_epoch=len(train_images),
+            rank=context.rank,
+            num_replicas=context.world_size,
+            seed=123,
+        )
+        train_sampler.set_epoch(0)
+        np.save(
+            Path(output_dir) / f"rank_{context.rank}_train_indices.npy",
+            train_sampler.local_indices(),
+        )
+
+        val_sampler = SequentialDistributedSampler(
+            dataset_length=len(test_images),
+            rank=context.rank,
+            num_replicas=context.world_size,
+        )
+        np.save(
+            Path(output_dir) / f"rank_{context.rank}_val_indices.npy",
+            np.asarray(val_sampler.indices(), dtype=np.int64),
+        )
+
+        net = ToyClassposeNet(device=str(context.device))
+        ddp_net = DDP(
+            net,
+            device_ids=[context.local_rank],
+            output_device=context.local_rank,
+        )
+        train_class_seg(
+            net=ddp_net,
+            train_data=train_images,
+            train_labels=train_labels,
+            test_data=test_images,
+            test_labels=test_labels,
+            batch_size=2,
+            n_epochs=1,
+            save_path=output_dir,
+            model_name="cuda_ddp_smoke",
+            save_every=1,
+            num_workers=0,
+            min_train_masks=0,
+            validate_every_epoch=True,
+            use_uncertainty_weighting=True,
+            device=context.device,
+            distributed=context.distributed,
+            rank=context.rank,
+            world_size=context.world_size,
+            config_snapshot={"test_case": "cuda_ddp_smoke"},
+            random_seed=123,
+        )
+    finally:
+        cleanup_distributed()
+
+
 def test_distributed_epoch_sampler_is_deterministic():
     probs = np.array([0.05, 0.15, 0.30, 0.50], dtype=np.float64)
     sampler_a = DistributedEpochSampler(
@@ -213,3 +304,47 @@ def test_train_class_seg_single_process_smoke(tmp_path):
     assert (model_dir / "checkpoint_best.train.pt").exists()
     assert train_losses.shape == (1,)
     assert test_losses.shape == (1,)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available()
+    or torch.cuda.device_count() < 2
+    or not dist.is_available()
+    or not dist.is_nccl_available(),
+    reason="requires more than one CUDA GPU with NCCL",
+)
+def test_train_class_seg_cuda_ddp_smoke(tmp_path):
+    output_dir = str(tmp_path)
+    world_size = 2
+    master_port = _find_free_port()
+
+    mp.spawn(
+        _run_cuda_ddp_smoke,
+        args=(world_size, master_port, output_dir),
+        nprocs=world_size,
+        join=True,
+    )
+
+    model_dir = tmp_path / "cuda_ddp_smoke"
+    assert (model_dir / "cuda_ddp_smoke").exists()
+    assert (model_dir / "cuda_ddp_smoke_best").exists()
+    assert (model_dir / "checkpoint_last.train.pt").exists()
+    assert (model_dir / "checkpoint_best.train.pt").exists()
+
+    train_rank0 = np.load(tmp_path / "rank_0_train_indices.npy")
+    train_rank1 = np.load(tmp_path / "rank_1_train_indices.npy")
+    assert set(train_rank0.tolist()).isdisjoint(set(train_rank1.tolist()))
+    assert sorted(train_rank0.tolist() + train_rank1.tolist()) == [0, 1, 2, 3]
+
+    val_rank0 = np.load(tmp_path / "rank_0_val_indices.npy")
+    val_rank1 = np.load(tmp_path / "rank_1_val_indices.npy")
+    assert set(val_rank0.tolist()).isdisjoint(set(val_rank1.tolist()))
+    assert sorted(val_rank0.tolist() + val_rank1.tolist()) == [0, 1]
+
+    checkpoint = torch.load(
+        model_dir / "checkpoint_last.train.pt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    assert len(checkpoint["rng_state_by_rank"]) == 2
+    assert checkpoint["config_snapshot"]["test_case"] == "cuda_ddp_smoke"
