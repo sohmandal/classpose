@@ -24,7 +24,86 @@ FEATURES = [
     "entropy_h",
     "entropy_e",
     "dist_to_lymph",
+    "hu_0",
+    "hu_1",
+    "hu_2",
+    "hu_3",
+    "hu_4",
+    "hu_5",
+    "hu_6",
 ]
+
+
+def hu_0(nu20, nu02):
+    return nu20 + nu02
+
+
+def hu_1(nu20, nu02, nu11):
+    return (nu20 - nu02) ** 2 + 4 * (nu11**2)
+
+
+def hu_2(nu30, nu12, nu21, nu03):
+    return (nu30 - 3 * nu12) ** 2 + (3 * nu21 - nu03) ** 2
+
+
+def hu_3(nu30, nu12, nu21, nu03):
+    return (nu30 + nu12) ** 2 + (nu21 + nu03) ** 2
+
+
+def hu_4(nu30, nu12, nu21, nu03):
+    return (nu30 - 3 * nu12) * (nu30 + nu12) * (
+        (nu30 + nu12) ** 2 - 3 * (nu21 + nu03) ** 2
+    ) + (3 * nu21 - nu03) * (nu21 + nu03) * (
+        3 * (nu30 + nu12) ** 2 - (nu21 + nu03) ** 2
+    )
+
+
+def hu_5(nu20, nu02, nu11, nu30, nu12, nu21, nu03):
+    return (nu20 - nu02) * (
+        (nu30 + nu12) ** 2 - (nu21 + nu03) ** 2
+    ) + 4 * nu11 * (nu30 + nu12) * (nu21 + nu03)
+
+
+def hu_6(nu30, nu12, nu21, nu03):
+    return (3 * nu21 - nu03) * (nu30 + nu12) * (
+        (nu30 + nu12) ** 2 - 3 * (nu21 + nu03) ** 2
+    ) - (nu30 - 3 * nu12) * (nu21 + nu03) * (
+        3 * (nu30 + nu12) ** 2 - (nu21 + nu03) ** 2
+    )
+
+
+def expand_features(cells: pl.DataFrame) -> pl.DataFrame:
+    """ """
+    cells = cells.with_columns(
+        # calculates elongation
+        (pl.col("major_axis") / pl.col("minor_axis"))
+        .fill_null(0.0)
+        .alias("elongation"),
+        hu_0(pl.col("nu20"), pl.col("nu02")).alias("hu_0"),
+        hu_1(pl.col("nu20"), pl.col("nu02"), pl.col("nu11")).alias("hu_1"),
+        hu_2(
+            pl.col("nu30"), pl.col("nu12"), pl.col("nu21"), pl.col("nu03")
+        ).alias("hu_2"),
+        hu_3(
+            pl.col("nu30"), pl.col("nu12"), pl.col("nu21"), pl.col("nu03")
+        ).alias("hu_3"),
+        hu_4(
+            pl.col("nu30"), pl.col("nu12"), pl.col("nu21"), pl.col("nu03")
+        ).alias("hu_4"),
+        hu_5(
+            pl.col("nu20"),
+            pl.col("nu02"),
+            pl.col("nu11"),
+            pl.col("nu30"),
+            pl.col("nu12"),
+            pl.col("nu21"),
+            pl.col("nu03"),
+        ).alias("hu_5"),
+        hu_6(
+            pl.col("nu30"), pl.col("nu12"), pl.col("nu21"), pl.col("nu03")
+        ).alias("hu_6"),
+    )
+    return cells
 
 
 def load_geojson_multipolygon(
@@ -87,12 +166,8 @@ def load_cells(
             nearest lymphocyte.
         polygon_areas (pl.DataFrame): DataFrame of tissue region areas.
     """
-    cells = pl.read_parquet(cells_path).with_columns(
-        # calculates elongation
-        (pl.col("major_axis") / pl.col("minor_axis"))
-        .fill_null(0.0)
-        .alias("elongation")
-    )
+    cells = pl.read_parquet(cells_path)
+    cells = expand_features(cells)
     centroids = cells.select(["centroid_x", "centroid_y"]).to_numpy()
     points = shapely.points(centroids)
     lymphocyte_centroids = centroids[cells["classification"] == "Lymphocyte"]
