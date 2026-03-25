@@ -90,8 +90,8 @@ def load_cells(
     cells = pl.read_parquet(cells_path).with_columns(
         # calculates elongation
         (pl.col("major_axis") / pl.col("minor_axis"))
-        .alias("elongation")
         .fill_null(0.0)
+        .alias("elongation")
     )
     centroids = cells.select(["centroid_x", "centroid_y"]).to_numpy()
     points = shapely.points(centroids)
