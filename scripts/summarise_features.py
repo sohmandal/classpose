@@ -88,6 +88,7 @@ def load_cells(
         polygon_areas (pl.DataFrame): DataFrame of tissue region areas.
     """
     cells = pl.read_parquet(cells_path).with_columns(
+        # calculates elongation
         (pl.col("major_axis") / pl.col("minor_axis"))
         .alias("elongation")
         .fill_null(0.0)
