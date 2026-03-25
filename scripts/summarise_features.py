@@ -34,23 +34,81 @@ FEATURES = [
 ]
 
 
-def hu_0(nu20, nu02):
+def hu_0(nu20: pl.Expr, nu02: pl.Expr) -> pl.Expr:
+    """
+    Calculates the 1st Hu invariant moment.
+
+    Args:
+        nu20 (pl.Expr): The normalized central moment nu20.
+        nu02 (pl.Expr): The normalized central moment nu02.
+
+    Returns:
+        pl.Expr: The 1st Hu invariant moment.
+    """
+
     return nu20 + nu02
 
 
-def hu_1(nu20, nu02, nu11):
+def hu_1(nu20: pl.Expr, nu02: pl.Expr, nu11: pl.Expr) -> pl.Expr:
+    """
+    Calculates the 2nd Hu invariant moment.
+
+    Args:
+        nu20 (pl.Expr): The normalized central moment nu20.
+        nu02 (pl.Expr): The normalized central moment nu02.
+        nu11 (pl.Expr): The normalized central moment nu11.
+
+    Returns:
+        pl.Expr: The 2nd Hu invariant moment.
+    """
     return (nu20 - nu02) ** 2 + 4 * (nu11**2)
 
 
-def hu_2(nu30, nu12, nu21, nu03):
+def hu_2(nu30: pl.Expr, nu12: pl.Expr, nu21: pl.Expr, nu03: pl.Expr) -> pl.Expr:
+    """
+    Calculates the 3rd Hu invariant moment.
+
+    Args:
+        nu30 (pl.Expr): The normalized central moment nu30.
+        nu12 (pl.Expr): The normalized central moment nu12.
+        nu21 (pl.Expr): The normalized central moment nu21.
+        nu03 (pl.Expr): The normalized central moment nu03.
+
+    Returns:
+        pl.Expr: The 3rd Hu invariant moment.
+    """
     return (nu30 - 3 * nu12) ** 2 + (3 * nu21 - nu03) ** 2
 
 
-def hu_3(nu30, nu12, nu21, nu03):
+def hu_3(nu30: pl.Expr, nu12: pl.Expr, nu21: pl.Expr, nu03: pl.Expr) -> pl.Expr:
+    """
+    Calculates the 4th Hu invariant moment.
+
+    Args:
+        nu30 (pl.Expr): The normalized central moment nu30.
+        nu12 (pl.Expr): The normalized central moment nu12.
+        nu21 (pl.Expr): The normalized central moment nu21.
+        nu03 (pl.Expr): The normalized central moment nu03.
+
+    Returns:
+        pl.Expr: The 4th Hu invariant moment.
+    """
     return (nu30 + nu12) ** 2 + (nu21 + nu03) ** 2
 
 
-def hu_4(nu30, nu12, nu21, nu03):
+def hu_4(nu30: pl.Expr, nu12: pl.Expr, nu21: pl.Expr, nu03: pl.Expr) -> pl.Expr:
+    """
+    Calculates the 5th Hu invariant moment.
+
+    Args:
+        nu30 (pl.Expr): The normalized central moment nu30.
+        nu12 (pl.Expr): The normalized central moment nu12.
+        nu21 (pl.Expr): The normalized central moment nu21.
+        nu03 (pl.Expr): The normalized central moment nu03.
+
+    Returns:
+        pl.Expr: The 5th Hu invariant moment.
+    """
     return (nu30 - 3 * nu12) * (nu30 + nu12) * (
         (nu30 + nu12) ** 2 - 3 * (nu21 + nu03) ** 2
     ) + (3 * nu21 - nu03) * (nu21 + nu03) * (
@@ -58,13 +116,48 @@ def hu_4(nu30, nu12, nu21, nu03):
     )
 
 
-def hu_5(nu20, nu02, nu11, nu30, nu12, nu21, nu03):
+def hu_5(
+    nu20: pl.Expr,
+    nu02: pl.Expr,
+    nu11: pl.Expr,
+    nu30: pl.Expr,
+    nu12: pl.Expr,
+    nu21: pl.Expr,
+    nu03: pl.Expr,
+) -> pl.Expr:
+    """
+    Calculates the 6th Hu invariant moment.
+
+    Args:
+        nu20 (pl.Expr): The normalized central moment nu20.
+        nu02 (pl.Expr): The normalized central moment nu02.
+        nu11 (pl.Expr): The normalized central moment nu11.
+        nu30 (pl.Expr): The normalized central moment nu30.
+        nu12 (pl.Expr): The normalized central moment nu12.
+        nu21 (pl.Expr): The normalized central moment nu21.
+        nu03 (pl.Expr): The normalized central moment nu03.
+
+    Returns:
+        pl.Expr: The 6th Hu invariant moment.
+    """
     return (nu20 - nu02) * (
         (nu30 + nu12) ** 2 - (nu21 + nu03) ** 2
     ) + 4 * nu11 * (nu30 + nu12) * (nu21 + nu03)
 
 
-def hu_6(nu30, nu12, nu21, nu03):
+def hu_6(nu30: pl.Expr, nu12: pl.Expr, nu21: pl.Expr, nu03: pl.Expr) -> pl.Expr:
+    """
+    Calculates the 7th Hu invariant moment.
+
+    Args:
+        nu30 (pl.Expr): The normalized central moment nu30.
+        nu12 (pl.Expr): The normalized central moment nu12.
+        nu21 (pl.Expr): The normalized central moment nu21.
+        nu03 (pl.Expr): The normalized central moment nu03.
+
+    Returns:
+        pl.Expr: The 7th Hu invariant moment.
+    """
     return (3 * nu21 - nu03) * (nu30 + nu12) * (
         (nu30 + nu12) ** 2 - 3 * (nu21 + nu03) ** 2
     ) - (nu30 - 3 * nu12) * (nu21 + nu03) * (
@@ -73,7 +166,19 @@ def hu_6(nu30, nu12, nu21, nu03):
 
 
 def expand_features(cells: pl.DataFrame) -> pl.DataFrame:
-    """ """
+    """
+    Calculates additional features, particularly elongation (using the major
+    and minor axes) and the 7 invariant (Hu) moments.
+
+    Args:
+        cells (pl.DataFrame): DataFrame containing cell features with columns
+            for major_axis, minor_axis, and normalized central moments (nu20,
+            nu02, nu11, nu30, nu12, nu21, nu03).
+
+    Returns:
+        pl.DataFrame: DataFrame with additional calculated features including
+            elongation and the 7 Hu invariant moments (hu_0 through hu_6).
+    """
     cells = cells.with_columns(
         # calculates elongation
         (pl.col("major_axis") / pl.col("minor_axis"))
