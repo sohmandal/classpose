@@ -63,7 +63,7 @@ class ClassposeDataset(Dataset):
         rescale: bool = True,
         scale_range: float | list[float] | None = 0.5,
         bsize: int = 256,
-        normalize_params: dict[str, Any] = {"normalize": True},
+        normalize_params: dict[str, Any] | None = None,
         augment: bool = True,
     ):
         """Initialize the base dataset configuration.
@@ -151,7 +151,7 @@ class ClassposeTrainingDataset(ClassposeDataset):
         rescale: bool = True,
         scale_range: float | list[float] | None = 0.5,
         bsize: int = 256,
-        normalize_params: dict[str, Any] = {"normalize": True},
+        normalize_params: dict[str, Any] | None = None,
         augment: bool = True,
     ):
         """
@@ -243,7 +243,7 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         rescale: bool = False,
         scale_range: float | list[float] | None = 0.5,
         bsize: int = 256,
-        normalize_params: dict[str, Any] = {"normalize": True},
+        normalize_params: dict[str, Any] | None = None,
         augment: bool = True,
         keep_open: bool = False,
     ):
