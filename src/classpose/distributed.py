@@ -103,22 +103,16 @@ def setup_distributed(
 
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    backend_name = backend or ("nccl" if torch.cuda.is_available() else "gloo")
+    backend_name = backend or "nccl"
 
-    if backend_name == "nccl":
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is required for NCCL distributed training")
-        torch.cuda.set_device(local_rank)
-        device = torch.device("cuda", local_rank)
-    elif device_arg == "cpu":
-        device = torch.device("cpu")
-    else:
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                "Distributed training requires CUDA in the runtime training path"
-            )
-        torch.cuda.set_device(local_rank)
-        device = torch.device("cuda", local_rank)
+    if backend_name != "nccl":
+        raise ValueError(
+            "Distributed setup currently supports NCCL only."
+        )
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required for NCCL distributed training")
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
 
     if not is_distributed():
         kwargs: dict[str, Any] = {"backend": backend_name}
