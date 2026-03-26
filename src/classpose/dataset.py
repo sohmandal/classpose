@@ -146,7 +146,7 @@ class ClassposeTrainingDataset(ClassposeDataset):
     - data_array: (N, C, H, W) where N is the number of images, C is the
         number of channels, H and W are the height and width of the images
     - label_array: (N, 5, H, W) where N is the number of images, 5 is the
-        number of channels (cell, cell type/class, instance, flow_y, flow_x),
+        number of channels (instance, cell type/class, binary mask, flow_y, flow_x),
         H and W are the height and width of the images
     - diameter_array: (N,) where N is the number of images (this is kept for
         compatibility with the original Cellpose API)
@@ -243,6 +243,13 @@ class ClassposeHDF5Dataset(ClassposeDataset):
     """
     HDF5-backed dataset for Classpose.
     Suitable for large datasets that don't fit in memory.
+
+    Expects an HDF5 file with two datasets:
+    - images: (N, C, H, W) where N is the number of images, C is the
+        number of channels, H and W are the height and width of the images
+    - labels: (N, 5, H, W) where N is the number of images, 5 is the
+        number of channels (instance, cell type/class, binary mask, flow_y, flow_x),
+        H and W are the height and width of the images
     """
 
     def __init__(
