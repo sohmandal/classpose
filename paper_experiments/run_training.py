@@ -6,7 +6,6 @@ import argparse
 import time
 import sys
 from copy import deepcopy
-from sklearn.model_selection import train_test_split
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 # Default values, can be overridden by command-line arguments
