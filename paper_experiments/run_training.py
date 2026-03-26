@@ -138,7 +138,7 @@ def parse_args():
         "--device",
         type=str,
         default="auto",
-        help="Device to use for training: 'auto' (automatic selection), 'cpu', 'mps' (for Apple Silicon), 'cuda', 'cuda:N', or GPU ID like '0', '1', '2', etc.",
+        help="Device to use for training. Accepted values are 'auto', 'cpu', 'mps', or 'cuda'. To choose CUDA GPUs, set CUDA_VISIBLE_DEVICES and pass --device cuda.",
     )
     parser.add_argument(
         "--resume_checkpoint",
@@ -219,6 +219,12 @@ from classpose.train_utils import (
 def main(args):
     torchrun_world_size = int(os.environ.get("WORLD_SIZE", "1"))
     distributed_requested = torchrun_world_size > 1
+    if args.device not in {"auto", "cpu", "mps", "cuda"}:
+        raise ValueError(
+            "Training only accepts --device=auto, --device=cpu, --device=mps, "
+            "or --device=cuda. To choose CUDA GPUs, set CUDA_VISIBLE_DEVICES "
+            "and use --device cuda."
+        )
     if distributed_requested and args.device in {"cpu", "mps"}:
         raise ValueError(
             "Distributed training currently supports CUDA only. "
@@ -231,13 +237,6 @@ def main(args):
             device_arg="cuda" if distributed_requested else args.device,
         )
         logger = get_logger("classpose")
-
-        if context.distributed and args.device not in {"auto", "cuda"}:
-            logger.warning(
-                "Ignoring --device=%s in distributed mode. Use CUDA_VISIBLE_DEVICES "
-                "to choose GPUs and let torchrun LOCAL_RANK select the per-rank device.",
-                args.device,
-            )
 
         effective_model_name = args.model_name
         if effective_model_name is None and is_main_process():

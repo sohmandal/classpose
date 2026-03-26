@@ -496,7 +496,6 @@ def train_class_seg(
         optimizer.add_param_group(
             {
                 "params": loss_aggregator.parameters(),
-                "lr": learning_rate * 0.1,
                 "lr_scale": 0.1,
             }
         )
