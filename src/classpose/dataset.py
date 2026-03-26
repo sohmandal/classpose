@@ -54,7 +54,9 @@ def augment_single_image(
 
 
 class ClassposeDataset(Dataset):
-    """Base class for Classpose datasets containing shared configuration and methods."""
+    """
+    Base class for Classpose datasets containing shared configuration and methods.
+    """
 
     def __init__(
         self,
@@ -139,6 +141,15 @@ class ClassposeDataset(Dataset):
 class ClassposeTrainingDataset(ClassposeDataset):
     """
     In-memory dataset for Classpose training.
+
+    Expects the following array shapes:
+    - data_array: (N, C, H, W) where N is the number of images, C is the
+        number of channels, H and W are the height and width of the images
+    - label_array: (N, 5, H, W) where N is the number of images, 5 is the
+        number of channels (cell, cell type/class, instance, flow_y, flow_x),
+        H and W are the height and width of the images
+    - diameter_array: (N,) where N is the number of images (this is kept for
+        compatibility with the original Cellpose API)
     """
 
     def __init__(
