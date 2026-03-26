@@ -448,7 +448,7 @@ def train_class_seg(
         class_weights = torch.from_numpy(class_weights).to(device).float()
 
     nimg = len(train_dataset)
-    nimg_test = len(train_dataset)
+    nimg_test = len(test_dataset) if test_dataset is not None else None
     nimg_per_epoch = nimg if nimg_per_epoch is None else nimg_per_epoch
     if nimg_test is not None and nimg_test_per_epoch not in (None, nimg_test):
         train_logger.warning(
