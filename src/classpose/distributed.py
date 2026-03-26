@@ -91,7 +91,9 @@ def _resolve_single_process_device(device_arg: str) -> torch.device:
 
 
 def setup_distributed(
-    device_arg: str, backend: str | None = None, timeout_seconds: int | None = None
+    device_arg: str,
+    backend: str | None = None,
+    timeout_seconds: int | None = None,
 ) -> DistributedContext:
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
 

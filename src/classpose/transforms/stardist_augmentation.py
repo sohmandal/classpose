@@ -119,7 +119,7 @@ class StarDistAugmentation:
 
 # Simplified factory function
 def create_stardist_augmentation(
-    config: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None,
 ) -> StarDistAugmentation:
     """Create StarDist augmentation with simplified configuration.
 

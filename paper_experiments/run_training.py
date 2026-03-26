@@ -29,10 +29,10 @@ if os.getenv("TF32", "0") == "1":
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Classpose model.")
     parser.add_argument(
-        "--data_dir",
+        "--data_path",
         type=str,
         default=DEFAULT_DATA_DIR,
-        help="Directory containing images.npy and labels.npy",
+        help="Directory containing images.npy and labels.npy or path to HDF5 file",
     )
     parser.add_argument(
         "--train_fraction",
@@ -201,8 +201,19 @@ from classpose.distributed import (
     setup_distributed,
 )
 from classpose.models import ClassposeModel
+from classpose.dataset import ClassposeHDF5Dataset
 from classpose.utils import make_sparse
 from classpose.log import get_logger, add_file_handler
+from classpose.train_utils import (
+    load_data_arrays,
+    subsample_dataset,
+    split_dataset,
+    process_and_build_dataset,
+    get_class_weights,
+    compute_oversampling_probabilities,
+    compute_custom_oversampling_probabilities,
+    compute_stardist_oversampling_probabilities,
+)
 
 
 def main(args):
@@ -250,7 +261,9 @@ def main(args):
         logger.info(f"Script: {os.path.abspath(__file__)}")
         logger.info(f"Raw Command: {raw_command}")
         logger.info(f"Parsed Arguments: {vars(args)}")
-        logger.info(f"Base Output Directory: {os.path.abspath(args.output_dir)}")
+        logger.info(
+            f"Base Output Directory: {os.path.abspath(args.output_dir)}"
+        )
         logger.info(
             f"Model Specific Directory: {os.path.abspath(model_specific_dir)}"
         )
@@ -299,117 +312,47 @@ def main(args):
 
         logger.info("Loading data")
 
-        images_path = os.path.join(args.data_dir, "images.npy")
-        labels_path = os.path.join(args.data_dir, "labels.npy")
-
-        if os.path.exists(images_path):
-            images = np.load(images_path, allow_pickle=True)
-            if np.issubdtype(images[0].dtype, np.object_):
-                new_images = np.empty(len(images), dtype=object)
-                for i, im in enumerate(images):
-                    im = np.ascontiguousarray(im).astype(np.float32)
-                    new_images[i] = im
-                images = new_images
-        else:
-            raise FileNotFoundError(f"Images not found: should be {images_path}")
-
-        if os.path.exists(labels_path):
-            labels = np.load(labels_path, allow_pickle=True)
-            if np.issubdtype(labels[0].dtype, np.object_):
-                new_labels = np.empty(len(labels), dtype=object)
-                for i, im in enumerate(labels):
-                    im = np.ascontiguousarray(im).astype(np.int64)
-                    new_labels[i] = im
-                labels = new_labels
-            if np.issubdtype(labels[0].dtype, np.floating):
-                logger.info("Labels are floating, converting to int64")
-                n_unique_float_labels = len(np.unique(labels))
-                labels = [im.astype(np.int64) for im in labels]
-                if len(np.unique(labels)) != n_unique_float_labels:
-                    error = (
-                        "Different number of unique labels after conversion to int64 - please check labels!"
-                    )
-                    logger.critical(error)
-                    raise ValueError(error)
-        else:
-            raise FileNotFoundError(f"Labels not found: should be {labels_path}")
-
-        if args.subsample_fraction is not None:
-            logger.info(f"Subsampling data to {args.subsample_fraction} fraction")
-            n = images.shape[0]
-            all_indices = np.arange(n, dtype=np.int32)
-            rng = np.random.default_rng(args.seed)
-            rng.shuffle(all_indices)
-            idxs = all_indices[: int(args.subsample_fraction * n)]
-            images = images[idxs]
-            labels = labels[idxs]
-
-        n = images.shape[0]
-        all_indices = np.arange(n, dtype=np.int32)
-        transp = (2, 0, 1)
-        if args.train_fraction < 1.0:
-            train_idx, test_idx = train_test_split(
-                all_indices,
-                train_size=args.train_fraction,
-                random_state=args.seed,
+        is_hdf5 = args.data_path.endswith(".h5") or args.data_path.endswith(
+            ".hdf5"
+        )
+        if is_hdf5:
+            dataset = ClassposeHDF5Dataset(
+                args.data_path, augmentation_strategy=args.augmentation_strategy
             )
-            train_images = [np.transpose(im, transp) for im in images[train_idx]]
-            train_labels = [np.transpose(im, transp) for im in labels[train_idx]]
-            test_images = [np.transpose(im, transp) for im in images[test_idx]]
-            test_labels = [np.transpose(im, transp) for im in labels[test_idx]]
-        else:
-            train_images = [np.transpose(im, transp) for im in images]
-            train_labels = [np.transpose(im, transp) for im in labels]
-            test_images = None
-            test_labels = None
+        if is_hdf5 is False:
+            images, labels = load_data_arrays(args.data_path)
+            dataset = process_and_build_dataset(
+                images,
+                labels,
+                augmentation_strategy=args.augmentation_strategy,
+            )
+
+        dataset = subsample_dataset(dataset, args.subsample_fraction, args.seed)
+        train_dataset, test_dataset = split_dataset(
+            dataset, args.train_fraction, args.seed
+        )
 
         if args.make_sparse:
+            if is_hdf5:
+                raise ValueError("Cannot make sparse labels for HDF5 dataset")
             logger.info("Making training labels sparse.")
-            train_labels = make_sparse(
-                train_labels, fraction=0.1, seed=args.seed
+            train_dataset.labels = make_sparse(
+                train_dataset.labels, fraction=0.1, seed=args.seed
             )
         else:
             logger.info("Skipping making training labels sparse.")
 
-        train_probs = None
-        if args.oversampling_method == "stardist":
-            from classpose.utils import compute_stardist_oversampling_probabilities
-
-            logger.info(
-                "Computing oversampling probabilities using StarDist methodology"
-            )
-            train_probs = compute_stardist_oversampling_probabilities(
-                train_labels, n_rare_classes=args.n_rare_classes
-            )
-            logger.info(
-                f"StarDist oversampling enabled - probability range: {train_probs.min():.6f} to {train_probs.max():.6f}"
-            )
-        elif args.oversampling_method == "custom":
-            from classpose.utils import compute_custom_oversampling_probabilities
-
-            logger.info(
-                "Computing oversampling probabilities using custom instance-weighted method"
-            )
-            train_probs = compute_custom_oversampling_probabilities(
-                train_labels, power=args.oversampling_power
-            )
-            logger.info(
-                f"Custom oversampling enabled - probability range: {train_probs.min():.6f} to {train_probs.max():.6f}"
-            )
-        else:
-            logger.info("Using uniform sampling (no oversampling)")
-
-        n_classes = int(max([im[1].max() for im in train_labels]) + 1)
+        n_classes = dataset.n_classes
+        train_probs = compute_oversampling_probabilities(
+            train_dataset,
+            oversampling_method=args.oversampling_method,
+            n_rare_classes=args.n_rare_classes,
+            oversampling_power=args.oversampling_power,
+        )
 
         class_weights = None
         if not args.no_class_weights:
-            from classpose.utils import get_class_weights
-
-            logger.info(
-                "Computing class weights using inverse frequency with square root scaling"
-            )
-            class_weights = get_class_weights(train_labels, n_classes)
-            logger.info(f"Class weights computed: {class_weights.tolist()}")
+            class_weights = get_class_weights(train_dataset.labels, n_classes)
         else:
             logger.info("Class weighting disabled - using uniform weights")
 
@@ -456,10 +399,8 @@ def main(args):
 
         train.train_class_seg(
             net=model.net,
-            train_data=train_images,
-            train_labels=train_labels,
-            test_data=test_images,
-            test_labels=test_labels,
+            train_dataset=train_dataset,
+            test_dataset=test_dataset,
             train_probs=train_probs,
             batch_size=args.batch_size,
             learning_rate=resolved_learning_rate,
@@ -469,11 +410,9 @@ def main(args):
             save_every=args.save_every,
             save_each=args.save_each,
             class_weights=class_weights,
-            augmentation_strategy=args.augmentation_strategy,
             num_workers=args.num_workers,
             use_uncertainty_weighting=args.use_uncertainty_weighting,
             validate_every_epoch=args.validate_every_epoch,
-            min_train_masks=args.min_train_masks,
             log_file_path=log_file_path if is_main_process() else None,
             random_seed=args.seed,
             device=context.device,
@@ -485,6 +424,7 @@ def main(args):
         )
     finally:
         cleanup_distributed()
+
 
 if __name__ == "__main__":
     import multiprocessing

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Iterator
 
 import numpy as np
@@ -52,7 +53,21 @@ def augment_single_image(
     return np.ascontiguousarray(image), np.ascontiguousarray(label)
 
 
-class ClassposeTrainingDataset(Dataset):
+class ClassposeDataset(Dataset):
+    def __len__(self) -> int:
+        raise NotImplementedError
+
+    def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
+        raise NotImplementedError
+
+    def subset(self, indices):
+        dataset_copy = deepcopy(self)
+        dataset_copy.indices = indices
+        dataset_copy.length = len(indices)
+        return dataset_copy
+
+
+class ClassposeTrainingDataset(ClassposeDataset):
     def __init__(
         self,
         data_array: np.ndarray,
@@ -78,8 +93,15 @@ class ClassposeTrainingDataset(Dataset):
         self.augment = augment
         self._augment_pipeline = None
 
+        self.length = len(self.data_array)
+        self.indices = np.arange(0, self.length, dtype=np.uint32)
+
+        self.n_classes = int(
+            max([np.max(lbl[1]) for lbl in self.label_array]) + 1
+        )
+
     def __len__(self) -> int:
-        return len(self.data_array)
+        return self.length
 
     def _get_augment_pipeline(self):
         if not self.augment or self.augment_pipeline_config is None:
@@ -91,6 +113,7 @@ class ClassposeTrainingDataset(Dataset):
         return self._augment_pipeline
 
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
+        index = self.indices[index]
         return augment_single_image(
             self.data_array[index],
             self.label_array[index][1:],
@@ -104,39 +127,50 @@ class ClassposeTrainingDataset(Dataset):
             augment_pipeline=self._get_augment_pipeline(),
         )
 
+    @property
+    def images(self):
+        return self.data_array
 
-class ClassposeHDF5Dataset(Dataset):
+    @property
+    def labels(self):
+        return [lbl[:2].astype(np.int16) for lbl in self.label_array]
+
+
+class ClassposeHDF5Dataset(ClassposeDataset):
     def __init__(
         self,
         hdf5_path: str,
         diameter_array: np.ndarray | None = None,
-        augment_pipeline_config: str | None = None,
-        diam_mean: float = 100,
-        rescale: bool = True,
-        scale_range: float | list[float] | None = None,
-        bsize: int = 128,
+        augmentation_strategy: str | None = None,
+        diam_mean: float = 30,
+        rescale: bool = False,
+        scale_range: float | list[float] | None = 0.5,
+        bsize: int = 256,
         normalize_params: dict[str, Any] = {"normalize": True},
         augment: bool = True,
         keep_open: bool = False,
     ):
         self.hdf5_path = hdf5_path
-        self.augment_pipeline_config = augment_pipeline_config
+        self.augmentation_strategy = augmentation_strategy
         self.diam_mean = diam_mean
         self.rescale = rescale
         self.scale_range = scale_range
         self.bsize = bsize
         self.normalize_params = normalize_params
         self.augment = augment
-        self.keep_open = True
+        self.keep_open = keep_open
         self._augment_pipeline = None
         self._hdf5_file = None
 
         self.length = self._get_length()
+        self.indices = np.arange(self.length, dtype=np.int32)
 
         if diameter_array is not None:
             self.diameter_array = diameter_array
         else:
             self.diameter_array = np.ones(self.length) * diam_mean
+
+        self._n_classes = None
 
     @property
     def hdf5_file(self):
@@ -154,33 +188,48 @@ class ClassposeHDF5Dataset(Dataset):
             with h5py.File(self.hdf5_path, "r") as f:
                 return len(f["images"])
 
-    def _get_item(self, i: int) -> tuple[np.ndarray, np.ndarray]:
+    def _get_item(
+        self, i: int | list[int] | slice
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if isinstance(i, slice):
+            i = [i for i in range(slice.start, slice.stop, slice.step)]
         if self.keep_open:
-            return self.hdf5_file["images"][i], self.hdf5_file["labels"][i]
+            if isinstance(i, (list, np.ndarray)):
+                images = np.stack([self.hdf5_file["images"][idx] for idx in i])
+                labels = np.stack([self.hdf5_file["labels"][idx] for idx in i])
+            else:
+                images = self.hdf5_file["images"][i]
+                labels = self.hdf5_file["labels"][i]
+            return images, labels
         else:
             with h5py.File(self.hdf5_path, "r") as f:
-                return f["images"][i], f["labels"][i]
+                if isinstance(i, (list, np.ndarray)):
+                    images = np.stack([f["images"][idx] for idx in i])
+                    labels = np.stack([f["labels"][idx] for idx in i])
+                else:
+                    images = f["images"][i]
+                    labels = f["labels"][i]
+                return images, labels
 
     def __len__(self) -> int:
         return self.length
 
     def _get_augment_pipeline(self):
-        if not self.augment or self.augment_pipeline_config is None:
+        if not self.augment or self.augmentation_strategy is None:
             return None
         if self._augment_pipeline is None:
             self._augment_pipeline = _build_augment_pipeline(
-                self.augment_pipeline_config
+                self.augmentation_strategy
             )
         return self._augment_pipeline
 
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
-
-        img, lbl = self._get_item(index)
+        img, lbl = self._get_item(self.indices[index])
 
         return augment_single_image(
             img,
             lbl[1:],
-            float(self.diameter_array[index]),
+            float(self.diameter_array[self.indices[index]]),
             diam_mean=self.diam_mean,
             rescale=self.rescale,
             scale_range=self.scale_range,
@@ -189,6 +238,25 @@ class ClassposeHDF5Dataset(Dataset):
             augment=self.augment,
             augment_pipeline=self._get_augment_pipeline(),
         )
+
+    @property
+    def images(self):
+        return [self._get_item(i)[0] for i in range(len(self))]
+
+    @property
+    def labels(self):
+        out = [
+            self._get_item(i)[1][:2].astype(np.int16) for i in range(len(self))
+        ]
+        return out
+
+    @property
+    def n_classes(self):
+        if self._n_classes is None:
+            self._n_classes = int(
+                max([lbl[1].max() for lbl in self.labels]) + 1
+            )
+        return self._n_classes
 
 
 class DistributedEpochSampler(Sampler[int]):
