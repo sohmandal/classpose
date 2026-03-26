@@ -54,13 +54,82 @@ def augment_single_image(
 
 
 class ClassposeDataset(Dataset):
+    """Base class for Classpose datasets containing shared configuration and methods."""
+
+    def __init__(
+        self,
+        augmentation_strategy: str | None = None,
+        diam_mean: float = 30.0,
+        rescale: bool = True,
+        scale_range: float | list[float] | None = 0.5,
+        bsize: int = 256,
+        normalize_params: dict[str, Any] = {"normalize": True},
+        augment: bool = True,
+    ):
+        """Initialize the base dataset configuration.
+
+        Args:
+            augmentation_strategy (str | None): Configuration string for the augmentation pipeline.
+            diam_mean (float): Mean diameter of the objects, used for scaling.
+            rescale (bool): Whether to rescale images based on object diameters.
+            scale_range (float | list[float] | None): Range for random scaling during augmentation.
+            bsize (int): Crop size for training.
+            normalize_params (dict[str, Any] | None): Parameters for image normalization.
+            augment (bool): Whether to apply any augmentations.
+        """
+        self.augmentation_strategy = augmentation_strategy
+        self.diam_mean = diam_mean
+        self.rescale = rescale
+        self.scale_range = scale_range
+        self.bsize = bsize
+        self.normalize_params = (
+            normalize_params
+            if normalize_params is not None
+            else {"normalize": True}
+        )
+        self.augment = augment
+        self._augment_pipeline = None
+
+        self.length = 0
+        self.indices = np.array([], dtype=np.int32)
+        self.diameter_array = np.array([])
+
     def __len__(self) -> int:
-        raise NotImplementedError
+        """Get the number of items in the dataset."""
+        return self.length
+
+    def _get_augment_pipeline(self):
+        """Build and cache the augmentation pipeline if required."""
+        if not self.augment or self.augmentation_strategy is None:
+            return None
+        if self._augment_pipeline is None:
+            self._augment_pipeline = _build_augment_pipeline(
+                self.augmentation_strategy
+            )
+        return self._augment_pipeline
 
     def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Get a single item from the dataset. Must be implemented by subclasses.
+
+        Args:
+            idx (int): The index of the item to retrieve.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The image and label at the specified index.
+        """
         raise NotImplementedError
 
-    def subset(self, indices):
+    def subset(self, indices: list[int] | np.ndarray) -> "ClassposeDataset":
+        """
+        Create a subset of the dataset using the given indices.
+
+        Args:
+            indices (list[int] | np.ndarray): The indices to include in the new subset.
+
+        Returns:
+            ClassposeDataset: A shallow copy of the dataset containing only the specified indices.
+        """
         dataset_copy = deepcopy(self)
         dataset_copy.indices = indices
         dataset_copy.length = len(indices)
@@ -68,30 +137,50 @@ class ClassposeDataset(Dataset):
 
 
 class ClassposeTrainingDataset(ClassposeDataset):
+    """
+    In-memory dataset for Classpose training.
+    """
+
     def __init__(
         self,
         data_array: np.ndarray,
         label_array: np.ndarray,
         diameter_array: np.ndarray,
         augment_pipeline_config: str | None = None,
-        diam_mean: float = 100,
+        diam_mean: float = 30.0,
         rescale: bool = True,
-        scale_range: float | list[float] | None = None,
-        bsize: int = 128,
+        scale_range: float | list[float] | None = 0.5,
+        bsize: int = 256,
         normalize_params: dict[str, Any] = {"normalize": True},
         augment: bool = True,
     ):
+        """
+        Initialize the training dataset from in-memory arrays.
+
+        Args:
+            data_array (np.ndarray): Array of input images.
+            label_array (np.ndarray): Array of ground truth labels.
+            diameter_array (np.ndarray): Array of object diameters for each image.
+            augment_pipeline_config (str | None): Configuration string for the augmentation pipeline.
+            diam_mean (float): Mean diameter of the objects, used for scaling.
+            rescale (bool): Whether to rescale images based on object diameters.
+            scale_range (float | list[float] | None): Range for random scaling during augmentation.
+            bsize (int): Crop size for training.
+            normalize_params (dict[str, Any] | None): Parameters for image normalization.
+            augment (bool): Whether to apply any augmentations.
+        """
+        super().__init__(
+            augmentation_strategy=augment_pipeline_config,
+            diam_mean=diam_mean,
+            rescale=rescale,
+            scale_range=scale_range,
+            bsize=bsize,
+            normalize_params=normalize_params,
+            augment=augment,
+        )
         self.data_array = data_array
         self.label_array = label_array
         self.diameter_array = diameter_array
-        self.augment_pipeline_config = augment_pipeline_config
-        self.diam_mean = diam_mean
-        self.rescale = rescale
-        self.scale_range = scale_range
-        self.bsize = bsize
-        self.normalize_params = normalize_params
-        self.augment = augment
-        self._augment_pipeline = None
 
         self.length = len(self.data_array)
         self.indices = np.arange(0, self.length, dtype=np.uint32)
@@ -100,24 +189,21 @@ class ClassposeTrainingDataset(ClassposeDataset):
             max([np.max(lbl[1]) for lbl in self.label_array]) + 1
         )
 
-    def __len__(self) -> int:
-        return self.length
-
-    def _get_augment_pipeline(self):
-        if not self.augment or self.augment_pipeline_config is None:
-            return None
-        if self._augment_pipeline is None:
-            self._augment_pipeline = _build_augment_pipeline(
-                self.augment_pipeline_config
-            )
-        return self._augment_pipeline
-
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
-        index = self.indices[index]
+        """
+        Get an augmented image and label pair at the specified index.
+
+        Args:
+            index (int): The index of the item to retrieve.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The augmented image and label at the specified index.
+        """
+        idx = self.indices[index]
         return augment_single_image(
-            self.data_array[index],
-            self.label_array[index][1:],
-            float(self.diameter_array[index]),
+            self.data_array[idx],
+            self.label_array[idx][1:],
+            float(self.diameter_array[idx]),
             diam_mean=self.diam_mean,
             rescale=self.rescale,
             scale_range=self.scale_range,
@@ -128,21 +214,32 @@ class ClassposeTrainingDataset(ClassposeDataset):
         )
 
     @property
-    def images(self):
+    def images(self) -> np.ndarray:
+        """
+        Get all images in the dataset.
+        """
         return self.data_array
 
     @property
-    def labels(self):
+    def labels(self) -> list[np.ndarray]:
+        """
+        Get all labels in the dataset, omitting extra channels if present.
+        """
         return [lbl[:2].astype(np.int16) for lbl in self.label_array]
 
 
 class ClassposeHDF5Dataset(ClassposeDataset):
+    """
+    HDF5-backed dataset for Classpose.
+    Suitable for large datasets that don't fit in memory.
+    """
+
     def __init__(
         self,
         hdf5_path: str,
         diameter_array: np.ndarray | None = None,
         augmentation_strategy: str | None = None,
-        diam_mean: float = 30,
+        diam_mean: float = 30.0,
         rescale: bool = False,
         scale_range: float | list[float] | None = 0.5,
         bsize: int = 256,
@@ -150,16 +247,31 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         augment: bool = True,
         keep_open: bool = False,
     ):
+        """Initialize the HDF5 dataset.
+
+        Args:
+            hdf5_path (str): Path to the HDF5 file containing 'images' and 'labels' datasets.
+            diameter_array (np.ndarray | None): Array of object diameters. If None, defaults to diam_mean.
+            augmentation_strategy (str | None): Configuration string for the augmentation pipeline.
+            diam_mean (float): Mean diameter of the objects, used for scaling.
+            rescale (bool): Whether to rescale images based on object diameters.
+            scale_range (float | list[float] | None): Range for random scaling during augmentation.
+            bsize (int): Crop size for training.
+            normalize_params (dict[str, Any] | None): Parameters for image normalization.
+            augment (bool): Whether to apply any augmentations.
+            keep_open (bool): Whether to keep the HDF5 file handle open (may cause issues with multiprocessing).
+        """
+        super().__init__(
+            augmentation_strategy=augmentation_strategy,
+            diam_mean=diam_mean,
+            rescale=rescale,
+            scale_range=scale_range,
+            bsize=bsize,
+            normalize_params=normalize_params,
+            augment=augment,
+        )
         self.hdf5_path = hdf5_path
-        self.augmentation_strategy = augmentation_strategy
-        self.diam_mean = diam_mean
-        self.rescale = rescale
-        self.scale_range = scale_range
-        self.bsize = bsize
-        self.normalize_params = normalize_params
-        self.augment = augment
         self.keep_open = keep_open
-        self._augment_pipeline = None
         self._hdf5_file = None
 
         self.length = self._get_length()
@@ -173,7 +285,13 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         self._n_classes = None
 
     @property
-    def hdf5_file(self):
+    def hdf5_file(self) -> h5py.File:
+        """
+        Get the HDF5 file handle, keeping it open if configured to do so.
+
+        Returns:
+            h5py.File: The HDF5 file handle.
+        """
         if self.keep_open:
             if self._hdf5_file is None:
                 self._hdf5_file = h5py.File(self.hdf5_path, "r")
@@ -181,7 +299,13 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         else:
             return h5py.File(self.hdf5_path, "r")
 
-    def _get_length(self):
+    def _get_length(self) -> int:
+        """
+        Get the total number of images in the HDF5 file.
+
+        Returns:
+            int: The number of images in the dataset.
+        """
         if self.keep_open:
             return len(self.hdf5_file["images"])
         else:
@@ -191,15 +315,18 @@ class ClassposeHDF5Dataset(ClassposeDataset):
     def _get_item(
         self, i: int | list[int] | slice
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Fetch items from the HDF5 file by index or slice."""
         if isinstance(i, slice):
-            i = [i for i in range(slice.start, slice.stop, slice.step)]
+            i = [idx for idx in range(slice.start, slice.stop, slice.step or 1)]
+
         if self.keep_open:
+            f = self.hdf5_file
             if isinstance(i, (list, np.ndarray)):
-                images = np.stack([self.hdf5_file["images"][idx] for idx in i])
-                labels = np.stack([self.hdf5_file["labels"][idx] for idx in i])
+                images = np.stack([f["images"][idx] for idx in i])
+                labels = np.stack([f["labels"][idx] for idx in i])
             else:
-                images = self.hdf5_file["images"][i]
-                labels = self.hdf5_file["labels"][i]
+                images = f["images"][i]
+                labels = f["labels"][i]
             return images, labels
         else:
             with h5py.File(self.hdf5_path, "r") as f:
@@ -211,25 +338,17 @@ class ClassposeHDF5Dataset(ClassposeDataset):
                     labels = f["labels"][i]
                 return images, labels
 
-    def __len__(self) -> int:
-        return self.length
-
-    def _get_augment_pipeline(self):
-        if not self.augment or self.augmentation_strategy is None:
-            return None
-        if self._augment_pipeline is None:
-            self._augment_pipeline = _build_augment_pipeline(
-                self.augmentation_strategy
-            )
-        return self._augment_pipeline
-
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
-        img, lbl = self._get_item(self.indices[index])
+        """
+        Get an augmented image and label pair at the specified index.
+        """
+        idx = self.indices[index]
+        img, lbl = self._get_item(idx)
 
         return augment_single_image(
             img,
             lbl[1:],
-            float(self.diameter_array[self.indices[index]]),
+            float(self.diameter_array[idx]),
             diam_mean=self.diam_mean,
             rescale=self.rescale,
             scale_range=self.scale_range,
@@ -240,18 +359,35 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         )
 
     @property
-    def images(self):
+    def images(self) -> list[np.ndarray]:
+        """
+        Get all images in the dataset. Note: this loads everything into memory.
+
+        Returns:
+            list[np.ndarray]: list with images.
+        """
         return [self._get_item(i)[0] for i in range(len(self))]
 
     @property
-    def labels(self):
-        out = [
+    def labels(self) -> list[np.ndarray]:
+        """
+        Get all labels in the dataset, omitting extra channels if present.
+
+        Returns:
+            list[np.ndarray]: list with labels.
+        """
+        return [
             self._get_item(i)[1][:2].astype(np.int16) for i in range(len(self))
         ]
-        return out
 
     @property
-    def n_classes(self):
+    def n_classes(self) -> int:
+        """
+        Get the number of classes present in the labels.
+
+        Returns:
+            int: The number of classes.
+        """
         if self._n_classes is None:
             self._n_classes = int(
                 max([lbl[1].max() for lbl in self.labels]) + 1
