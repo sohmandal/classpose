@@ -169,26 +169,53 @@ cell_types:
 
 ## Training
 
-Classpose supports custom model training with features like sparse annotation support, class weighting, and uncertainty-based loss balancing.
+Classpose supports custom model training with features like sparse annotation support, class weighting, and uncertainty-based loss balancing. We support training with both numpy arrays and HDF5 files.
 
-**Basic example:**
+The expected formats are as follows:
+- For **arrays**, we expect the images to be numpy arrays with shape (C, H, W) and the labels to be numpy arrays with shape (2, H, W) where the first channel contains instance labels and the second channel contains class labels.
+- For **HDF5**, we expect the images to be stored in a dataset named "images" and the labels to be stored in a dataset named "labels". The labels should have 5 channels: [instance mask, binary cell mask, classification cell mask, flow_y, flow_x].
+
+**Basic example using arrays:**
 
 ```python
 from classpose.models import ClassposeModel
 from classpose.train import train_class_seg
+from classpose.train_utils import load_data_arrays
 
 # Initialize model
-model = ClassposeModel(gpu=True, pretrained_model="cpsam", nclasses=6)
+model = ClassposeModel(
+  gpu=True, pretrained_model="cpsam", nclasses=6)
 
-# Train (expects data as lists of numpy arrays with shape (C, H, W))
-# Labels should have 2 channels: [instances, class] where the last channel contains class labels
-# Optionally 4 channels: [instances, flow_y, flow_x, class] if flows are pre-computed
+train_images, train_labels = load_data_arrays(
+  "train_images.npy", "train_labels.npy")
+dataset = process_and_build_dataset(train_images, train_labels)
+
 train_class_seg(
     net=model.net,
-    train_data=train_images,      # List of image arrays
-    train_labels=train_labels,    # List of label arrays 
-    test_data=test_images,        # Optional validation data
-    test_labels=test_labels,
+    train_dataset=dataset,
+    n_epochs=100,
+    batch_size=4,
+    save_path="./models",
+    model_name="my_classpose_model"
+)
+```
+
+**Basic example with HDF5**
+
+```python
+from classpose.models import ClassposeModel
+from classpose.train import train_class_seg
+from classpose.dataset import ClassposeHDF5Dataset
+
+# Initialize model
+model = ClassposeModel(
+  gpu=True, pretrained_model="cpsam", nclasses=6)
+
+dataset = ClassposeHDF5Dataset("dataset.h5")
+
+train_class_seg(
+    net=model.net,
+    train_dataset=dataset,
     n_epochs=100,
     batch_size=4,
     save_path="./models",
