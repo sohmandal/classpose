@@ -5,7 +5,7 @@ import h5py
 from tqdm import tqdm
 from pathlib import Path
 
-from classpose.train import _process_train_test
+from classpose.train_utils import _process_train_test
 from classpose.log import get_logger
 
 logger = get_logger(__name__)
