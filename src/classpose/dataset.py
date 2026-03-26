@@ -117,7 +117,7 @@ class ClassposeHDF5Dataset(Dataset):
         bsize: int = 128,
         normalize_params: dict[str, Any] = {"normalize": True},
         augment: bool = True,
-        keep_open: bool = True,
+        keep_open: bool = False,
     ):
         self.hdf5_path = hdf5_path
         self.augment_pipeline_config = augment_pipeline_config
