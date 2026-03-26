@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Iterator
 
 import numpy as np
+import h5py
 from cellpose.transforms import normalize_img, random_rotate_and_resize
 from torch.utils.data import Dataset, Sampler
 
@@ -104,6 +105,92 @@ class ClassposeTrainingDataset(Dataset):
         )
 
 
+class ClassposeHDF5Dataset(Dataset):
+    def __init__(
+        self,
+        hdf5_path: str,
+        diameter_array: np.ndarray | None = None,
+        augment_pipeline_config: str | None = None,
+        diam_mean: float = 100,
+        rescale: bool = True,
+        scale_range: float | list[float] | None = None,
+        bsize: int = 128,
+        normalize_params: dict[str, Any] = {"normalize": True},
+        augment: bool = True,
+        keep_open: bool = True,
+    ):
+        self.hdf5_path = hdf5_path
+        self.augment_pipeline_config = augment_pipeline_config
+        self.diam_mean = diam_mean
+        self.rescale = rescale
+        self.scale_range = scale_range
+        self.bsize = bsize
+        self.normalize_params = normalize_params
+        self.augment = augment
+        self.keep_open = True
+        self._augment_pipeline = None
+        self._hdf5_file = None
+
+        self.length = self._get_length()
+
+        if diameter_array is not None:
+            self.diameter_array = diameter_array
+        else:
+            self.diameter_array = np.ones(self.length) * diam_mean
+
+    @property
+    def hdf5_file(self):
+        if self.keep_open:
+            if self._hdf5_file is None:
+                self._hdf5_file = h5py.File(self.hdf5_path, "r")
+            return self._hdf5_file
+        else:
+            return h5py.File(self.hdf5_path, "r")
+
+    def _get_length(self):
+        if self.keep_open:
+            return len(self.hdf5_file["images"])
+        else:
+            with h5py.File(self.hdf5_path, "r") as f:
+                return len(f["images"])
+
+    def _get_item(self, i: int) -> tuple[np.ndarray, np.ndarray]:
+        if self.keep_open:
+            return self.hdf5_file["images"][i], self.hdf5_file["labels"][i]
+        else:
+            with h5py.File(self.hdf5_path, "r") as f:
+                return f["images"][i], f["labels"][i]
+
+    def __len__(self) -> int:
+        return self.length
+
+    def _get_augment_pipeline(self):
+        if not self.augment or self.augment_pipeline_config is None:
+            return None
+        if self._augment_pipeline is None:
+            self._augment_pipeline = _build_augment_pipeline(
+                self.augment_pipeline_config
+            )
+        return self._augment_pipeline
+
+    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
+
+        img, lbl = self._get_item(index)
+
+        return augment_single_image(
+            img,
+            lbl[1:],
+            float(self.diameter_array[index]),
+            diam_mean=self.diam_mean,
+            rescale=self.rescale,
+            scale_range=self.scale_range,
+            bsize=self.bsize,
+            normalize_params=self.normalize_params,
+            augment=self.augment,
+            augment_pipeline=self._get_augment_pipeline(),
+        )
+
+
 class DistributedEpochSampler(Sampler[int]):
     def __init__(
         self,
@@ -188,7 +275,9 @@ class DistributedEpochSampler(Sampler[int]):
 
     def _build_local_indices(self, epoch: int | None = None) -> np.ndarray:
         global_indices = self._build_global_indices(epoch=epoch)
-        reshaped = global_indices.reshape(-1, self.num_replicas, self.batch_size)
+        reshaped = global_indices.reshape(
+            -1, self.num_replicas, self.batch_size
+        )
         return reshaped[:, self.rank, :].reshape(-1)
 
     def set_epoch(self, epoch: int) -> None:
@@ -225,8 +314,8 @@ class SequentialDistributedSampler(Sampler[int]):
         base = dataset_length // num_replicas
         remainder = dataset_length % num_replicas
         self.start_index = rank * base + min(rank, remainder)
-        self.end_index = self.start_index + base + (
-            1 if rank < remainder else 0
+        self.end_index = (
+            self.start_index + base + (1 if rank < remainder else 0)
         )
 
     def indices(self) -> list[int]:
