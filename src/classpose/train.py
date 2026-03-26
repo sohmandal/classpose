@@ -2,18 +2,34 @@ import os
 import time
 import random
 from pathlib import Path
+from typing import Any
 
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from cellpose import dynamics, models, utils
-from cellpose.train import _get_batch, _loss_fn_seg, _reshape_norm
-from cellpose.transforms import normalize_img, random_rotate_and_resize
+from cellpose.train import _loss_fn_seg, _reshape_norm
 from skimage import io
 from torch import nn
+from torch.utils.data import DataLoader
 from tqdm import trange
 
-from classpose.dataset import ClassposeDataset
+from classpose.dataset import (
+    ClassposeTrainingDataset,
+    DistributedEpochSampler,
+    SequentialDistributedSampler,
+)
+from classpose.distributed import (
+    all_reduce_sum,
+    get_rank,
+    get_world_size,
+    is_distributed,
+    is_main_process,
+    seed_worker,
+    sync_module_grads,
+    unwrap_model,
+)
 from classpose.log import get_logger, add_file_handler
 from classpose.utils import get_default_device
 
@@ -465,70 +481,6 @@ def _process_train_test(
     )
 
 
-def _process_single_image(args):
-    """
-    Helper function for multiprocessing - processes a single image with geometric transforms and normalization.
-
-    Args:
-        args: Tuple of (img, lbl, rescale_factor, scale_range, bsize, normalize_params)
-
-    Returns:
-        Tuple of (processed_image, processed_label)
-    """
-    img, lbl, r, scale_range, bsize, normalize_params = args
-    img_, lbl_ = random_rotate_and_resize(
-        [img], Y=[lbl], rescale=[r], scale_range=scale_range, xy=(bsize, bsize)
-    )[:2]
-    img_ = normalize_img(img_[0], **normalize_params)
-    return img_, lbl_[0]
-
-
-def _get_batch_and_augment(
-    data: list[np.ndarray] | None,
-    labels: list[np.ndarray] | None,
-    files: list[str] | None,
-    labels_files: list[str] | None,
-    kwargs: dict,
-    inds: list[int],
-    diams: np.ndarray,
-    diam_mean: float,
-    rescale: bool,
-    scale_range: list[float] | None,
-    bsize: int,
-    normalize_params: dict,
-    augment: bool,
-    augment_pipeline,
-):
-    imgs, lbls = _get_batch(
-        inds,
-        data=data,
-        labels=labels,
-        files=files,
-        labels_files=labels_files,
-        **kwargs,
-    )
-    diams = np.array([diams[i] for i in inds])
-    rsc = diams / diam_mean if rescale else np.ones(len(diams), "float32")
-    # augmentations
-    if augment:
-        if augment_pipeline is not None:
-            imgs = augment_pipeline.transform_batch(imgs)
-        # Parallelize random_rotate_and_resize and normalization
-        args_list = [
-            (imgs[i], lbls[i], rsc[i], scale_range, bsize, normalize_params)
-            for i in range(len(imgs))
-        ]
-        imgi, lbl = zip(*(_process_single_image(args) for args in args_list))
-        imgi, lbl = list(imgi), list(lbl)
-    else:
-        imgi = imgs
-        lbl = lbls
-        imgi = [normalize_img(img, **normalize_params) for img in imgi]
-    imgi = np.stack(imgi)
-    lbl = np.stack(lbl)
-    return imgi, lbl
-
-
 def seed_everything(seed: int):
     """
     Seed all random number generators for reproducibility.
@@ -543,10 +495,162 @@ def seed_everything(seed: int):
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    torch.mps.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    if (
+        hasattr(torch, "mps")
+        and hasattr(torch.mps, "manual_seed")
+        and torch.backends.mps.is_available()
+    ):
+        torch.mps.manual_seed(seed)
+
+
+def _set_optimizer_lrs(
+    optimizer: torch.optim.Optimizer, learning_rate: float
+) -> None:
+    for param_group in optimizer.param_groups:
+        lr_scale = param_group.get("lr_scale", 1.0)
+        param_group["lr"] = learning_rate * lr_scale
+
+
+def _build_dataloader(
+    dataset,
+    batch_size: int,
+    sampler,
+    num_workers: int,
+    pin_memory: bool,
+    seed: int,
+) -> DataLoader:
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
+        worker_init_fn=seed_worker,
+        generator=generator,
+        drop_last=False,
+    )
+
+
+def _capture_rng_state() -> dict[str, Any]:
+    rng_state: dict[str, Any] = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        rng_state["cuda_all"] = torch.cuda.get_rng_state_all()
+    return rng_state
+
+
+def _restore_rng_state(rng_state: dict[str, Any] | None) -> None:
+    if rng_state is None:
+        return
+    random.setstate(rng_state["python"])
+    np.random.set_state(rng_state["numpy"])
+    torch_state = rng_state["torch"]
+    if isinstance(torch_state, torch.Tensor):
+        torch_state = torch_state.detach().cpu().to(dtype=torch.uint8)
+    torch.set_rng_state(torch_state)
+    if torch.cuda.is_available() and "cuda_all" in rng_state:
+        cuda_states = []
+        for state in rng_state["cuda_all"]:
+            if isinstance(state, torch.Tensor):
+                cuda_states.append(state.detach().cpu().to(dtype=torch.uint8))
+            else:
+                cuda_states.append(state)
+        torch.cuda.set_rng_state_all(cuda_states)
+
+
+def _gather_rng_states(distributed: bool) -> list[dict[str, Any]]:
+    local_state = _capture_rng_state()
+    if not distributed:
+        return [local_state]
+
+    gathered_states: list[dict[str, Any] | None] = [None] * get_world_size()
+    dist.all_gather_object(gathered_states, local_state)
+    return [state for state in gathered_states if state is not None]
+
+
+def _save_training_checkpoint(
+    checkpoint_path: Path,
+    net: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    loss_aggregator: nn.Module,
+    epoch: int,
+    best_val_loss: float,
+    train_losses: np.ndarray,
+    test_losses: np.ndarray,
+    config_snapshot: dict[str, Any] | None,
+    distributed: bool,
+) -> None:
+    rng_state_by_rank = _gather_rng_states(distributed)
+    if not is_main_process():
+        return
+
+    checkpoint = {
+        "epoch": int(epoch),
+        "model_state_dict": unwrap_model(net).state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss_aggregator_state_dict": loss_aggregator.state_dict(),
+        "best_val_loss": float(best_val_loss),
+        "train_losses": train_losses,
+        "test_losses": test_losses,
+        "config_snapshot": config_snapshot,
+        "rng_state_by_rank": rng_state_by_rank,
+    }
+    torch.save(checkpoint, checkpoint_path)
+
+
+def _move_optimizer_state_to_device(
+    optimizer: torch.optim.Optimizer, device: torch.device
+) -> None:
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if isinstance(value, torch.Tensor):
+                state[key] = value.to(device)
+
+
+def _load_training_checkpoint(
+    checkpoint_path: str,
+    net: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    loss_aggregator: nn.Module,
+    device: torch.device,
+) -> dict[str, Any]:
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=device,
+        weights_only=False,
+    )
+    unwrap_model(net).load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    _move_optimizer_state_to_device(optimizer, device)
+
+    loss_aggregator_state = checkpoint.get("loss_aggregator_state_dict")
+    if loss_aggregator_state is not None:
+        loss_aggregator.load_state_dict(loss_aggregator_state)
+
+    rng_state_by_rank = checkpoint.get("rng_state_by_rank")
+    if rng_state_by_rank:
+        rank = get_rank()
+        if rank < len(rng_state_by_rank):
+            _restore_rng_state(rng_state_by_rank[rank])
+
+    return checkpoint
+
+
+def _should_validate(iepoch: int, validate_every_epoch: bool) -> bool:
+    return validate_every_epoch or iepoch == 5 or iepoch % 10 == 0
 
 
 def train_class_seg(
@@ -589,6 +693,12 @@ def train_class_seg(
     validate_every_epoch: bool = False,
     log_file_path: str | None = None,
     random_seed: int = 42,
+    device: torch.device | None = None,
+    distributed: bool | None = None,
+    rank: int | None = None,
+    world_size: int | None = None,
+    resume_checkpoint: str | None = None,
+    config_snapshot: dict[str, Any] | None = None,
 ):
     """
     Train the network with images for segmentation.
@@ -600,17 +710,19 @@ def train_class_seg(
         train_files (list[str], optional): List of strings - file names for images in train_data (to save flows for future runs). Defaults to None.
         train_labels_files (list, optional): List of training label file paths. Defaults to None.
         train_probs (list[float], optional): List of floats - probabilities for each image to be selected during training. Defaults to None.
+        train_classes (list[int], optional): Per-instance class labels aligned with train_labels when they are provided separately. Defaults to None.
         test_data (list[np.ndarray], optional): List of arrays (2D or 3D) - images for testing. Defaults to None.
         test_labels (list[np.ndarray], optional): List of arrays (2D or 3D) - labels for test_data, where 0=no masks; 1,2,...=mask labels. Defaults to None.
         test_files (list[str], optional): List of strings - file names for images in test_data (to save flows for future runs). Defaults to None.
         test_labels_files (list, optional): List of test label file paths. Defaults to None.
         test_probs (list[float], optional): List of floats - probabilities for each image to be selected during testing. Defaults to None.
+        test_classes (list[int], optional): Per-instance class labels aligned with test_labels when they are provided separately. Defaults to None.
+        channel_axis (int | None, optional): Channel dimension for raw image arrays before reshaping/normalization. Defaults to None.
         load_files (bool, optional): Boolean - whether to load images and labels from files. Defaults to True.
-        batch_size (int, optional): Integer - number of patches to run simultaneously on the GPU. Defaults to 8.
-        learning_rate (float | list[float], optional): Float or list/np.ndarray - learning rate for training. Defaults to 0.005.
-        n_epochs (int, optional): Integer - number of times to go through the whole training set during training. Defaults to 2000.
-        weight_decay (float, optional): Float - weight decay for the optimizer. Defaults to 1e-5.
-        momentum (float, optional): Float - momentum for the optimizer. Defaults to 0.9.
+        batch_size (int, optional): Number of training samples processed per optimizer step on the current process. Defaults to 1.
+        learning_rate (float | list[float], optional): Base learning rate used to build the warmup/decay schedule. Defaults to 5e-5.
+        n_epochs (int, optional): Number of training epochs to run. Defaults to 100.
+        weight_decay (float, optional): Weight decay for AdamW. Defaults to 0.1.
         SGD (bool, optional): Deprecated in v4.0.1+ - AdamW always used.
         normalize (bool | dict, optional): Boolean or dictionary - whether to normalize the data. Defaults to True.
         compute_flows (bool, optional): Boolean - whether to compute flows during training. Defaults to False.
@@ -619,25 +731,44 @@ def train_class_seg(
         save_each (bool, optional): Boolean - save the network to a new filename at every [save_each] epoch. Defaults to False.
         nimg_per_epoch (int, optional): Integer - minimum number of images to train on per epoch. Defaults to None.
         nimg_test_per_epoch (int, optional): Integer - minimum number of images to test on per epoch. Defaults to None.
-        rescale (bool, optional): Boolean - whether or not to rescale images during training. Defaults to True.
+        rescale (bool, optional): Whether or not to rescale images during training. Defaults to False.
         min_train_masks (int, optional): Integer - minimum number of masks an image must have to use in the training set. Defaults to 5.
         model_name (str, optional): String - name of the network. Defaults to None.
         class_weights (list[float], optional): List of class weights for weighted loss computation. Defaults to None.
         augmentation_strategy (str, optional): Pre-defined augmentation strategy name. Options: 'hed_only', 'enhanced'. Defaults to 'hed_only'.
-        num_workers (int, optional): Number of workers for data loading. Defaults to 4.
+        num_workers (int, optional): Number of DataLoader workers used for data loading. Defaults to 4.
         use_uncertainty_weighting (bool, optional): Whether to use task uncertainty weighting for automatic loss balancing. If True, the model learns optimal weights for segmentation, classification CE, and Tversky losses automatically. If False, uses equal weighting (1.0 each). Defaults to False.
+        validate_every_epoch (bool, optional): If True, run validation at every epoch instead of the legacy sparse schedule. Defaults to False.
         log_file_path (str, optional): Path to the log file. Defaults to None.
+        random_seed (int, optional): Base random seed. The effective seed is offset by rank in distributed training. Defaults to 42.
+        device (torch.device | None, optional): Explicit device for training and checkpoint restore. If None, it is derived from the model/device helpers. Defaults to None.
+        distributed (bool | None, optional): Whether distributed training is active. If None, the function infers it from torch.distributed state. Defaults to None.
+        rank (int | None, optional): Rank of the current process in distributed training. If None, it is inferred from torch.distributed state. Defaults to None.
+        world_size (int | None, optional): Total number of distributed processes. If None, it is inferred from torch.distributed state. Defaults to None.
+        resume_checkpoint (str | None, optional): Path to a `.train.pt` training-state checkpoint to resume from. Defaults to None.
+        config_snapshot (dict[str, Any] | None, optional): Run configuration persisted into resume checkpoints for traceability. Defaults to None.
     Returns:
         tuple: A tuple containing the path to the saved model weights, training losses, and test losses.
 
     """
-    if log_file_path is not None:
+    distributed = is_distributed() if distributed is None else distributed
+    rank = get_rank() if rank is None else rank
+    world_size = get_world_size() if world_size is None else world_size
+
+    if log_file_path is not None and is_main_process():
         add_file_handler(train_logger, log_file_path)
 
     if SGD:
         train_logger.warning("SGD is deprecated, using AdamW instead")
 
-    device = net.device
+    raw_net = unwrap_model(net)
+    if device is None:
+        try:
+            device = next(raw_net.parameters()).device
+        except StopIteration:
+            device = get_default_device(None)
+    device = get_default_device(device)
+    seed_everything(random_seed + rank)
 
     scale_range = 0.5 if scale_range is None else scale_range
 
@@ -648,6 +779,8 @@ def train_class_seg(
     else:
         normalize_params = models.normalize_default.copy()
         normalize_params["normalize"] = normalize
+
+    oversampling_active = train_probs is not None
 
     out = _process_train_test(
         train_data=train_data,
@@ -667,7 +800,7 @@ def train_class_seg(
         compute_flows=compute_flows,
         channel_axis=channel_axis,
         normalize_params={"normalize": False},
-        device=net.device,
+        device=device,
     )
     (
         train_data,
@@ -684,7 +817,7 @@ def train_class_seg(
         test_probs,
         test_classes,
         diam_test,
-        normed,
+        _normed,
     ) = out
     train_labels = [
         np.concatenate((y[:1], y_class, y[1:]), axis=0)
@@ -695,16 +828,8 @@ def train_class_seg(
             np.concatenate((y[:1], y_class, y[1:]), axis=0)
             for y, y_class in zip(test_labels, test_classes)
         ]
-    # already normalized, do not normalize during training
-    if normed:
-        kwargs = {}
-    else:
-        kwargs = {
-            "normalize_params": normalize_params,
-            "channel_axis": channel_axis,
-        }
 
-    net.diam_labels.data = torch.Tensor([diam_train.mean()]).to(device)
+    raw_net.diam_labels.data = torch.tensor([diam_train.mean()], device=device)
 
     if class_weights is not None and isinstance(
         class_weights, (list, np.ndarray, tuple)
@@ -716,24 +841,27 @@ def train_class_seg(
     nimg_test = len(test_data) if test_data is not None else None
     nimg_test = len(test_files) if test_files is not None else nimg_test
     nimg_per_epoch = nimg if nimg_per_epoch is None else nimg_per_epoch
-    nimg_test_per_epoch = (
-        nimg_test if nimg_test_per_epoch is None else nimg_test_per_epoch
-    )
+    if nimg_test is not None and nimg_test_per_epoch not in (None, nimg_test):
+        train_logger.warning(
+            "nimg_test_per_epoch is ignored in the DataLoader validation path; "
+            "the full validation set is evaluated once per validation epoch."
+        )
+    nimg_test_per_epoch = nimg_test
 
-    # learning rate schedule
     LR = np.linspace(0, learning_rate, 10)
     LR = np.append(LR, learning_rate * np.ones(max(0, n_epochs - 10)))
     if n_epochs > 300:
         LR = LR[:-100]
-        for i in range(10):
+        for _ in range(10):
             LR = np.append(LR, LR[-1] / 2 * np.ones(10))
     elif n_epochs > 99:
         LR = LR[:-50]
-        for i in range(10):
+        for _ in range(10):
             LR = np.append(LR, LR[-1] / 2 * np.ones(5))
 
     train_logger.info(
-        f">>> n_epochs={n_epochs}, n_train={nimg}, n_test={nimg_test}"
+        f">>> n_epochs={n_epochs}, n_train={nimg}, n_test={nimg_test}, "
+        f"distributed={distributed}, rank={rank}, world_size={world_size}"
     )
     train_logger.info(
         f">>> AdamW, learning_rate={learning_rate:0.5f}, weight_decay={weight_decay:0.5f}"
@@ -742,29 +870,24 @@ def train_class_seg(
         net.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
 
-    # Check if segmentation head is trainable
     seg_trainable = (
-        any(p.requires_grad for p in net.out.parameters())
-        or net.W2.requires_grad
+        any(p.requires_grad for p in raw_net.out.parameters())
+        or raw_net.W2.requires_grad
     )
 
-    # Determine number of active losses
     n_active_losses = 2
     if seg_trainable:
         n_active_losses += 1
 
-    # Initialize loss aggregator
     loss_aggregator = LossAggregator(
         n_losses=n_active_losses, optimise=use_uncertainty_weighting
     ).to(device)
 
     if use_uncertainty_weighting:
-        # Add uncertainty parameters to optimizer with lower learning rate
         optimizer.add_param_group(
             {
                 "params": loss_aggregator.parameters(),
-                "lr": learning_rate
-                * 0.1,  # Use lower LR for uncertainty params
+                "lr_scale": 0.1,
             }
         )
         train_logger.info(
@@ -778,290 +901,344 @@ def train_class_seg(
     t0 = time.time()
     model_name = f"cellpose_{t0}" if model_name is None else model_name
     save_path = Path.cwd() if save_path is None else Path(save_path)
-
-    # Create a directory named after the model and save weights inside it
     model_dir = save_path / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
     filename = model_dir / model_name
+    checkpoint_last = model_dir / "checkpoint_last.train.pt"
+    checkpoint_best = model_dir / "checkpoint_best.train.pt"
 
     train_logger.info(f">>> saving model to {filename}")
 
-    lavg, nsum = 0, 0
     train_losses, test_losses = np.zeros(n_epochs), np.zeros(n_epochs)
     best_val_loss = np.inf
 
-    # Initialize augmentation pipeline based on strategy
     train_logger.info(
         f">>> Using augmentation strategy: '{augmentation_strategy}'"
     )
-
-    # Log multiprocessing configuration
     if num_workers > 0:
         train_logger.info(
             f">>> Using multiprocessing for training with {num_workers} workers"
         )
     else:
-        train_logger.info(">>> Using single-threaded processing for training")
+        train_logger.info(
+            ">>> Using single-threaded processing for training"
+        )
 
-    train_dataset = ClassposeDataset(
+    train_dataset = ClassposeTrainingDataset(
         data_array=train_data,
         label_array=train_labels,
         diameter_array=diam_train,
-        diam_mean=net.diam_mean.item(),
+        diam_mean=raw_net.diam_mean.item(),
         rescale=rescale,
         scale_range=scale_range,
         bsize=bsize,
         normalize_params=normalize_params,
         augment=True,
         augment_pipeline_config=augmentation_strategy,
-        n_proc=num_workers,
+    )
+    train_sampler = DistributedEpochSampler(
+        dataset_length=nimg,
+        train_probs=train_probs if oversampling_active else None,
+        nimg_per_epoch=nimg_per_epoch,
         batch_size=batch_size,
+        rank=rank,
+        num_replicas=world_size,
+        seed=random_seed,
     )
 
-    seed_everything(random_seed)
+    pin_memory = device.type == "cuda"
+    train_loader = _build_dataloader(
+        dataset=train_dataset,
+        batch_size=batch_size,
+        sampler=train_sampler,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        seed=random_seed + rank,
+    )
 
-    for iepoch in range(n_epochs):
-        rng = np.random.default_rng(iepoch)
-        if nimg != nimg_per_epoch:
-            # choose random images for epoch with probability train_probs
-            rperm = rng.choice(
-                np.arange(0, nimg), size=(nimg_per_epoch,), p=train_probs
+    val_loader = None
+    if test_data is not None or test_files is not None:
+        test_dataset = ClassposeTrainingDataset(
+            data_array=test_data,
+            label_array=test_labels,
+            diameter_array=diam_test,
+            diam_mean=raw_net.diam_mean.item(),
+            rescale=rescale,
+            scale_range=scale_range,
+            bsize=bsize,
+            normalize_params=normalize_params,
+            augment=True,
+            augment_pipeline_config=None,
+        )
+        val_sampler = (
+            SequentialDistributedSampler(
+                dataset_length=nimg_test,
+                rank=rank,
+                num_replicas=world_size,
             )
-        else:
-            if train_probs is None:
-                rperm = rng.permutation(np.arange(0, nimg))
-            else:
-                # otherwise oversample
-                rperm = rng.choice(
-                    np.arange(0, nimg), size=(nimg,), p=train_probs
-                )
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = LR[iepoch]  # set learning rate
+            if distributed
+            else None
+        )
+        val_loader = _build_dataloader(
+            dataset=test_dataset,
+            batch_size=batch_size,
+            sampler=val_sampler,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            seed=random_seed + rank + 10_000,
+        )
+
+    start_epoch = 0
+    if resume_checkpoint is not None:
+        if not resume_checkpoint.endswith(".train.pt"):
+            raise ValueError(
+                "Resume checkpoints must be training-state artifacts ending in '.train.pt'. "
+            )
+        checkpoint = _load_training_checkpoint(
+            checkpoint_path=resume_checkpoint,
+            net=net,
+            optimizer=optimizer,
+            loss_aggregator=loss_aggregator,
+            device=device,
+        )
+        best_val_loss = float(checkpoint.get("best_val_loss", np.inf))
+        saved_train_losses = checkpoint.get("train_losses")
+        if saved_train_losses is not None:
+            n_saved = min(len(train_losses), len(saved_train_losses))
+            train_losses[:n_saved] = saved_train_losses[:n_saved]
+        saved_test_losses = checkpoint.get("test_losses")
+        if saved_test_losses is not None:
+            n_saved = min(len(test_losses), len(saved_test_losses))
+            test_losses[:n_saved] = saved_test_losses[:n_saved]
+        start_epoch = int(checkpoint["epoch"]) + 1
+        train_logger.info(
+            f">>> Resuming training from {resume_checkpoint} at epoch {start_epoch}"
+        )
+
+    if start_epoch >= n_epochs:
+        raise ValueError(
+            f"Resume checkpoint already completed epoch {start_epoch - 1}; "
+            f"requested n_epochs={n_epochs} leaves no training steps to run."
+        )
+
+    last_completed_epoch = start_epoch - 1
+
+    for iepoch in range(start_epoch, n_epochs):
+        train_sampler.set_epoch(iepoch)
+        _set_optimizer_lrs(optimizer, LR[iepoch])
         net.train()
 
-        # Initialize epoch loss accumulators
-        epoch_train_seg_loss = 0.0
-        epoch_train_ce_loss = 0.0
-        epoch_train_tversky_loss = 0.0
-        epoch_train_total_loss = 0.0
-        num_batches = 0
+        train_seg_sum = 0.0
+        train_ce_sum = 0.0
+        train_tversky_sum = 0.0
+        train_total_sum = 0.0
+        train_sample_count = 0
 
-        # make rperm divisible by batch_size so there are no hanging images
-        rperm = rperm[: nimg_per_epoch - nimg_per_epoch % batch_size]
-        train_dataset.put(rperm.tolist(), reset_queues=True)
-
-        for _ in trange(0, rperm.shape[0], batch_size):
-            imgi, lbl = train_dataset.get()
-            # network and loss optimization
-            X = torch.from_numpy(imgi).to(device)
-            lbl = torch.from_numpy(lbl).to(device)
+        for X, lbl in train_loader:
+            X = X.to(device, non_blocking=pin_memory).float()
+            lbl = lbl.to(device, non_blocking=pin_memory)
             y = net(X)[0]
-
-            batch_seg_loss = 0.0
-            batch_ce_loss = 0.0
-            batch_tversky_loss = 0.0
 
             if seg_trainable:
                 loss_seg = _loss_fn_seg(lbl, y, device)
                 batch_seg_loss = loss_seg.item()
             else:
-                loss_seg = torch.tensor(0.0, device=device, requires_grad=True)
+                loss_seg = None
+                batch_seg_loss = 0.0
 
             loss_ce = _loss_fn_class(lbl, y, class_weights=class_weights)
             loss_tversky = _loss_fn_tversky(
                 lbl,
                 y,
                 class_weights=class_weights,
-                n_classes=net.n_cell_classes,
+                n_classes=raw_net.n_cell_classes,
             )
-            batch_ce_loss = loss_ce.item()
-            batch_tversky_loss = loss_tversky.item()
 
-            # Choose weighting strategy
             active_losses = []
-            if seg_trainable:
+            if loss_seg is not None:
                 active_losses.append(loss_seg)
             active_losses.append(loss_ce)
             active_losses.append(loss_tversky)
-
             loss = loss_aggregator(*active_losses)
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            if distributed and use_uncertainty_weighting:
+                sync_module_grads(loss_aggregator)
             optimizer.step()
 
-            batch_total_loss = loss.item()
+            batch_size_local = int(X.shape[0])
+            train_sample_count += batch_size_local
+            train_seg_sum += batch_seg_loss * batch_size_local
+            train_ce_sum += loss_ce.item() * batch_size_local
+            train_tversky_sum += loss_tversky.item() * batch_size_local
+            train_total_sum += loss.item() * batch_size_local
 
-            # Accumulate losses for epoch averaging
-            epoch_train_seg_loss += batch_seg_loss
-            epoch_train_ce_loss += batch_ce_loss
-            epoch_train_tversky_loss += batch_tversky_loss
-            epoch_train_total_loss += batch_total_loss
-            num_batches += 1
-
-            train_loss = batch_total_loss
-            train_loss *= len(imgi)
-
-            # keep track of average training loss across epochs
-            lavg += train_loss
-            nsum += len(imgi)
-            # per epoch training loss
-            train_losses[iepoch] += train_loss
-
-        # Average epoch losses
+        train_totals = torch.tensor(
+            [
+                train_seg_sum,
+                train_ce_sum,
+                train_tversky_sum,
+                train_total_sum,
+                train_sample_count,
+            ],
+            device=device,
+            dtype=torch.float64,
+        )
+        train_totals = all_reduce_sum(train_totals)
+        total_train_samples = int(train_totals[4].item())
         avg_train_seg_loss = (
-            epoch_train_seg_loss / num_batches if num_batches > 0 else 0.0
+            train_totals[0].item() / total_train_samples
+            if total_train_samples > 0
+            else 0.0
         )
         avg_train_ce_loss = (
-            epoch_train_ce_loss / num_batches if num_batches > 0 else 0.0
+            train_totals[1].item() / total_train_samples
+            if total_train_samples > 0
+            else 0.0
         )
         avg_train_tversky_loss = (
-            epoch_train_tversky_loss / num_batches if num_batches > 0 else 0.0
+            train_totals[2].item() / total_train_samples
+            if total_train_samples > 0
+            else 0.0
         )
         avg_train_total_loss = (
-            epoch_train_total_loss / num_batches if num_batches > 0 else 0.0
+            train_totals[3].item() / total_train_samples
+            if total_train_samples > 0
+            else 0.0
         )
+        train_losses[iepoch] = avg_train_total_loss
 
-        train_losses[iepoch] /= nimg_per_epoch
-
-        # Log training losses
-        if use_uncertainty_weighting:
-            current_weights = loss_aggregator.get_uncertainty_factors(
-                seg_trainable=seg_trainable
-            )
-            train_logger.info(
-                f"Epoch {iepoch}, Segmentation Loss: {avg_train_seg_loss:.4f}, Classification CE Loss: {avg_train_ce_loss:.4f}, Tversky Loss: {avg_train_tversky_loss:.4f}, Total Loss: {avg_train_total_loss:.4f}, LR={LR[iepoch]:.6f}, time {time.time()-t0:.2f}s"
-            )
-
-            weight_parts = []
-            if "seg_weight" in current_weights:
-                weight_parts.append(f"Seg: {current_weights['seg_weight']:.3f}")
-            if "ce_weight" in current_weights:
-                weight_parts.append(f"CE: {current_weights['ce_weight']:.3f}")
-            if "tversky_weight" in current_weights:
-                weight_parts.append(
-                    f"Tversky: {current_weights['tversky_weight']:.3f}"
+        if is_main_process():
+            if use_uncertainty_weighting:
+                current_weights = loss_aggregator.get_uncertainty_factors(
+                    seg_trainable=seg_trainable
                 )
-
-            if weight_parts:
                 train_logger.info(
-                    f"Epoch {iepoch} Uncertainty Weights - {', '.join(weight_parts)}"
+                    f"Epoch {iepoch}, Segmentation Loss: {avg_train_seg_loss:.4f}, "
+                    f"Classification CE Loss: {avg_train_ce_loss:.4f}, "
+                    f"Tversky Loss: {avg_train_tversky_loss:.4f}, "
+                    f"Total Loss: {avg_train_total_loss:.4f}, "
+                    f"LR={optimizer.param_groups[0]['lr']:.6f}, time {time.time()-t0:.2f}s"
                 )
-        else:
-            train_logger.info(
-                f"Epoch {iepoch}, Segmentation Loss: {avg_train_seg_loss:.4f}, Classification CE Loss: {avg_train_ce_loss:.4f}, Tversky Loss: {avg_train_tversky_loss:.4f}, Total Loss: {avg_train_total_loss:.4f}, LR={LR[iepoch]:.6f}, time {time.time()-t0:.2f}s"
-            )
 
-        if validate_every_epoch or iepoch == 5 or iepoch % 10 == 0:
-            lavgt = 0.0
-            val_seg_loss = 0.0
-            val_ce_loss = 0.0
-            val_tversky_loss = 0.0
-            val_total_loss = 0.0
-            val_batches = 0
-
-            if test_data is not None or test_files is not None:
-                rng = np.random.default_rng(42)
-                if nimg_test != nimg_test_per_epoch:
-                    rperm = rng.choice(
-                        np.arange(0, nimg_test),
-                        size=(nimg_test_per_epoch,),
-                        p=test_probs,
+                weight_parts = []
+                if "seg_weight" in current_weights:
+                    weight_parts.append(
+                        f"Seg: {current_weights['seg_weight']:.3f}"
                     )
-                else:
-                    rperm = rng.permutation(np.arange(0, nimg_test))
-                for ibatch in range(0, len(rperm), batch_size):
-                    with torch.no_grad():
-                        net.eval()
-                        inds = rperm[ibatch : ibatch + batch_size]
-                        imgi, lbl = _get_batch_and_augment(
-                            data=test_data,
-                            labels=test_labels,
-                            files=test_files,
-                            labels_files=test_labels_files,
-                            kwargs=kwargs,
-                            inds=inds,
-                            diams=diam_test,
-                            diam_mean=net.diam_mean.item(),
-                            rescale=rescale,
-                            scale_range=scale_range,
-                            bsize=bsize,
-                            normalize_params=normalize_params,
-                            augment=True,
-                            augment_pipeline=None,
-                        )
-                        X = torch.from_numpy(imgi).to(device)
-                        lbl = torch.from_numpy(lbl).to(device)
-                        y = net(X)[0]
+                if "ce_weight" in current_weights:
+                    weight_parts.append(
+                        f"CE: {current_weights['ce_weight']:.3f}"
+                    )
+                if "tversky_weight" in current_weights:
+                    weight_parts.append(
+                        f"Tversky: {current_weights['tversky_weight']:.3f}"
+                    )
+                if weight_parts:
+                    train_logger.info(
+                        f"Epoch {iepoch} Uncertainty Weights - {', '.join(weight_parts)}"
+                    )
+            else:
+                train_logger.info(
+                    f"Epoch {iepoch}, Segmentation Loss: {avg_train_seg_loss:.4f}, "
+                    f"Classification CE Loss: {avg_train_ce_loss:.4f}, "
+                    f"Tversky Loss: {avg_train_tversky_loss:.4f}, "
+                    f"Total Loss: {avg_train_total_loss:.4f}, "
+                    f"LR={optimizer.param_groups[0]['lr']:.6f}, time {time.time()-t0:.2f}s"
+                )
 
+        if _should_validate(iepoch, validate_every_epoch) and val_loader is not None:
+            net.eval()
+            val_seg_sum = 0.0
+            val_ce_sum = 0.0
+            val_tversky_sum = 0.0
+            val_total_sum = 0.0
+            val_sample_count = 0
+
+            with torch.no_grad():
+                for X, lbl in val_loader:
+                    X = X.to(device, non_blocking=pin_memory).float()
+                    lbl = lbl.to(device, non_blocking=pin_memory)
+                    y = net(X)[0]
+
+                    if seg_trainable:
+                        loss_seg_val = _loss_fn_seg(lbl, y, device)
+                        batch_val_seg_loss = loss_seg_val.item()
+                    else:
+                        loss_seg_val = None
                         batch_val_seg_loss = 0.0
-                        batch_val_ce_loss = 0.0
-                        batch_val_tversky_loss = 0.0
 
-                        if seg_trainable:
-                            loss_seg_val = _loss_fn_seg(lbl, y, device)
-                            batch_val_seg_loss = loss_seg_val.item()
-                        else:
-                            loss_seg_val = torch.tensor(
-                                0.0, device=device, requires_grad=True
-                            )
+                    loss_ce_val = _loss_fn_class(
+                        lbl, y, class_weights=class_weights
+                    )
+                    loss_tversky_val = _loss_fn_tversky(
+                        lbl,
+                        y,
+                        class_weights=class_weights,
+                        n_classes=raw_net.n_cell_classes,
+                    )
 
-                        loss_ce_val = _loss_fn_class(
-                            lbl, y, class_weights=class_weights
-                        )
-                        loss_tversky_val = _loss_fn_tversky(
-                            lbl,
-                            y,
-                            class_weights=class_weights,
-                            n_classes=net.n_cell_classes,
-                        )
-                        batch_val_ce_loss = loss_ce_val.item()
-                        batch_val_tversky_loss = loss_tversky_val.item()
+                    active_losses = []
+                    if loss_seg_val is not None:
+                        active_losses.append(loss_seg_val)
+                    active_losses.append(loss_ce_val)
+                    active_losses.append(loss_tversky_val)
+                    loss = loss_aggregator(*active_losses)
 
-                        # Choose weighting strategy for validation
-                        active_losses = []
-                        if seg_trainable:
-                            active_losses.append(loss_seg_val)
-                        active_losses.append(loss_ce_val)
-                        active_losses.append(loss_tversky_val)
+                    batch_size_local = int(X.shape[0])
+                    val_sample_count += batch_size_local
+                    val_seg_sum += batch_val_seg_loss * batch_size_local
+                    val_ce_sum += loss_ce_val.item() * batch_size_local
+                    val_tversky_sum += loss_tversky_val.item() * batch_size_local
+                    val_total_sum += loss.item() * batch_size_local
 
-                        loss = loss_aggregator(*active_losses)
+            val_totals = torch.tensor(
+                [
+                    val_seg_sum,
+                    val_ce_sum,
+                    val_tversky_sum,
+                    val_total_sum,
+                    val_sample_count,
+                ],
+                device=device,
+                dtype=torch.float64,
+            )
+            val_totals = all_reduce_sum(val_totals)
+            total_val_samples = int(val_totals[4].item())
+            avg_val_seg_loss = (
+                val_totals[0].item() / total_val_samples
+                if total_val_samples > 0
+                else 0.0
+            )
+            avg_val_ce_loss = (
+                val_totals[1].item() / total_val_samples
+                if total_val_samples > 0
+                else 0.0
+            )
+            avg_val_tversky_loss = (
+                val_totals[2].item() / total_val_samples
+                if total_val_samples > 0
+                else 0.0
+            )
+            avg_val_total_loss = (
+                val_totals[3].item() / total_val_samples
+                if total_val_samples > 0
+                else 0.0
+            )
+            test_losses[iepoch] = avg_val_total_loss
 
-                        test_loss = loss.item()
-                        test_loss *= len(imgi)
-                        lavgt += test_loss
-
-                        # Accumulate validation losses
-                        val_seg_loss += batch_val_seg_loss
-                        val_ce_loss += batch_val_ce_loss
-                        val_tversky_loss += batch_val_tversky_loss
-                        val_total_loss += loss.item()
-                        val_batches += 1
-
-                lavgt /= len(rperm)
-                test_losses[iepoch] = lavgt
-
-                # Average validation losses
-                avg_val_seg_loss = (
-                    val_seg_loss / val_batches if val_batches > 0 else 0.0
-                )
-                avg_val_ce_loss = (
-                    val_ce_loss / val_batches if val_batches > 0 else 0.0
-                )
-                avg_val_tversky_loss = (
-                    val_tversky_loss / val_batches if val_batches > 0 else 0.0
-                )
-                avg_val_total_loss = (
-                    val_total_loss / val_batches if val_batches > 0 else 0.0
-                )
-
-                # Log validation losses
+            if is_main_process():
                 if use_uncertainty_weighting:
                     current_weights = loss_aggregator.get_uncertainty_factors(
                         seg_trainable=seg_trainable
                     )
                     train_logger.info(
-                        f"Epoch {iepoch} Validation, Segmentation Loss: {avg_val_seg_loss:.4f}, Classification CE Loss: {avg_val_ce_loss:.4f}, Tversky Loss: {avg_val_tversky_loss:.4f}, Total Loss: {avg_val_total_loss:.4f}, LR={LR[iepoch]:.6f}, time {time.time()-t0:.2f}s"
+                        f"Epoch {iepoch} Validation, Segmentation Loss: {avg_val_seg_loss:.4f}, "
+                        f"Classification CE Loss: {avg_val_ce_loss:.4f}, "
+                        f"Tversky Loss: {avg_val_tversky_loss:.4f}, "
+                        f"Total Loss: {avg_val_total_loss:.4f}, "
+                        f"LR={optimizer.param_groups[0]['lr']:.6f}, time {time.time()-t0:.2f}s"
                     )
 
                     weight_parts = []
@@ -1077,39 +1254,96 @@ def train_class_seg(
                         weight_parts.append(
                             f"Tversky: {current_weights['tversky_weight']:.3f}"
                         )
-
                     if weight_parts:
                         train_logger.info(
                             f"Epoch {iepoch} Validation Uncertainty Weights - {', '.join(weight_parts)}"
                         )
                 else:
                     train_logger.info(
-                        f"Epoch {iepoch} Validation, Segmentation Loss: {avg_val_seg_loss:.4f}, Classification CE Loss: {avg_val_ce_loss:.4f}, Tversky Loss: {avg_val_tversky_loss:.4f}, Total Loss: {avg_val_total_loss:.4f}, LR={LR[iepoch]:.6f}, time {time.time()-t0:.2f}s"
+                        f"Epoch {iepoch} Validation, Segmentation Loss: {avg_val_seg_loss:.4f}, "
+                        f"Classification CE Loss: {avg_val_ce_loss:.4f}, "
+                        f"Tversky Loss: {avg_val_tversky_loss:.4f}, "
+                        f"Total Loss: {avg_val_total_loss:.4f}, "
+                        f"LR={optimizer.param_groups[0]['lr']:.6f}, time {time.time()-t0:.2f}s"
                     )
 
-                # Save best model based on validation loss
-                if avg_val_total_loss < best_val_loss:
-                    best_val_loss = avg_val_total_loss
-                    filename_best = model_dir / f"{model_name}_best"
+            if avg_val_total_loss < best_val_loss:
+                best_val_loss = avg_val_total_loss
+                filename_best = model_dir / f"{model_name}_best"
+                if is_main_process():
                     train_logger.info(
                         f"New best validation loss: {best_val_loss:.4f}. Saving model to {filename_best}"
                     )
-                    net.save_model(filename_best)
+                    raw_net.save_model(filename_best)
+                _save_training_checkpoint(
+                    checkpoint_path=checkpoint_best,
+                    net=net,
+                    optimizer=optimizer,
+                    loss_aggregator=loss_aggregator,
+                    epoch=iepoch,
+                    best_val_loss=best_val_loss,
+                    train_losses=train_losses,
+                    test_losses=test_losses,
+                    config_snapshot=config_snapshot,
+                    distributed=distributed,
+                )
 
-            lavg /= nsum
-            lavg, nsum = 0, 0
-
-        if iepoch == n_epochs - 1 or (iepoch % save_every == 0 and iepoch != 0):
-            if (
-                save_each and iepoch != n_epochs - 1
-            ):  # separate files as model progresses
-                filename0 = str(filename) + f"_epoch_{iepoch:04d}"
+        if iepoch != n_epochs - 1 and iepoch % save_every == 0 and iepoch != 0:
+            if save_each:
+                filename0 = Path(str(filename) + f"_epoch_{iepoch:04d}")
+                checkpoint_epoch = (
+                    model_dir / f"checkpoint_epoch_{iepoch:04d}.train.pt"
+                )
             else:
                 filename0 = filename
-            train_logger.info(f"saving network parameters to {filename0}")
-            net.save_model(filename0)
+                checkpoint_epoch = checkpoint_last
 
-    train_logger.info(f"Saving the final model to {filename}")
-    net.save_model(filename)
+            if is_main_process():
+                train_logger.info(f"saving network parameters to {filename0}")
+                raw_net.save_model(filename0)
+
+            _save_training_checkpoint(
+                checkpoint_path=checkpoint_last,
+                net=net,
+                optimizer=optimizer,
+                loss_aggregator=loss_aggregator,
+                epoch=iepoch,
+                best_val_loss=best_val_loss,
+                train_losses=train_losses,
+                test_losses=test_losses,
+                config_snapshot=config_snapshot,
+                distributed=distributed,
+            )
+            if save_each:
+                _save_training_checkpoint(
+                    checkpoint_path=checkpoint_epoch,
+                    net=net,
+                    optimizer=optimizer,
+                    loss_aggregator=loss_aggregator,
+                    epoch=iepoch,
+                    best_val_loss=best_val_loss,
+                    train_losses=train_losses,
+                    test_losses=test_losses,
+                    config_snapshot=config_snapshot,
+                    distributed=distributed,
+                )
+
+        last_completed_epoch = iepoch
+
+    if is_main_process():
+        train_logger.info(f"Saving the final model to {filename}")
+        raw_net.save_model(filename)
+    _save_training_checkpoint(
+        checkpoint_path=checkpoint_last,
+        net=net,
+        optimizer=optimizer,
+        loss_aggregator=loss_aggregator,
+        epoch=last_completed_epoch,
+        best_val_loss=best_val_loss,
+        train_losses=train_losses,
+        test_losses=test_losses,
+        config_snapshot=config_snapshot,
+        distributed=distributed,
+    )
 
     return filename, train_losses, test_losses
