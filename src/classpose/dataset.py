@@ -97,11 +97,21 @@ class ClassposeDataset(Dataset):
         self.indices = np.array([], dtype=np.int32)
 
     def __len__(self) -> int:
-        """Get the number of items in the dataset."""
+        """
+        Get the number of items in the dataset.
+
+        Returns:
+            int: The number of items in the dataset.
+        """
         return self.length
 
     def _get_augment_pipeline(self):
-        """Build and cache the augmentation pipeline if required."""
+        """
+        Build and cache the augmentation pipeline if required.
+
+        Returns:
+            Callable | None: The augmentation pipeline or None if no augmentation is configured.
+        """
         if not self.augment or self.augmentation_strategy is None:
             return None
         if self._augment_pipeline is None:
@@ -333,7 +343,15 @@ class ClassposeHDF5Dataset(ClassposeDataset):
     def _get_item(
         self, i: int | list[int] | slice
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Fetch items from the HDF5 file by index or slice."""
+        """
+        Fetch items from the HDF5 file by index or slice.
+
+        Args:
+            i (int | list[int] | slice): The index or slice to fetch.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The fetched images and labels.
+        """
         if isinstance(i, slice):
             i = [idx for idx in range(slice.start, slice.stop, slice.step or 1)]
 
@@ -359,6 +377,12 @@ class ClassposeHDF5Dataset(ClassposeDataset):
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
         """
         Get an augmented image and label pair at the specified index.
+
+        Args:
+            index (int): The index of the item to retrieve.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The augmented image and label pair.
         """
         idx = self.indices[index]
         img, lbl = self._get_item(idx)
