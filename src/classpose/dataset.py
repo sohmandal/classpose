@@ -91,10 +91,10 @@ class ClassposeDataset(Dataset):
         )
         self.augment = augment
         self._augment_pipeline = None
+        self.diameter_array = None
 
         self.length = 0
         self.indices = np.array([], dtype=np.int32)
-        self.diameter_array = np.array([])
 
     def __len__(self) -> int:
         """Get the number of items in the dataset."""
@@ -137,6 +137,10 @@ class ClassposeDataset(Dataset):
         dataset_copy.length = len(indices)
         return dataset_copy
 
+    def initialise_diameter_array_if_necessary(self):
+        if self.diameter_array is None:
+            self.diameter_array = np.ones(self.length) * self.diam_mean
+
 
 class ClassposeTrainingDataset(ClassposeDataset):
     """
@@ -156,7 +160,7 @@ class ClassposeTrainingDataset(ClassposeDataset):
         self,
         data_array: np.ndarray,
         label_array: np.ndarray,
-        diameter_array: np.ndarray,
+        diameter_array: np.ndarray | None = None,
         augment_pipeline_config: str | None = None,
         diam_mean: float = 30.0,
         rescale: bool = True,
@@ -192,13 +196,13 @@ class ClassposeTrainingDataset(ClassposeDataset):
         self.data_array = data_array
         self.label_array = label_array
         self.diameter_array = diameter_array
-
         self.length = len(self.data_array)
         self.indices = np.arange(0, self.length, dtype=np.uint32)
 
         self.n_classes = int(
             max([np.max(lbl[1]) for lbl in self.label_array]) + 1
         )
+        self.initialise_diameter_array_if_necessary()
 
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -289,18 +293,14 @@ class ClassposeHDF5Dataset(ClassposeDataset):
             augment=augment,
         )
         self.hdf5_path = hdf5_path
+        self.diameter_array = diameter_array
         self.keep_open = keep_open
         self._hdf5_file = None
 
         self.length = self._get_length()
         self.indices = np.arange(self.length, dtype=np.int32)
-
-        if diameter_array is not None:
-            self.diameter_array = diameter_array
-        else:
-            self.diameter_array = np.ones(self.length) * diam_mean
-
         self._n_classes = None
+        self.initialise_diameter_array_if_necessary()
 
     @property
     def hdf5_file(self) -> h5py.File:
