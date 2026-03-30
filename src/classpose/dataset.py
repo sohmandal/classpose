@@ -8,8 +8,8 @@ import h5py
 from cellpose.transforms import normalize_img, random_rotate_and_resize
 from torch.utils.data import Dataset, Sampler
 
-from classpose.log import get_logger
 from classpose.transforms import create_stardist_augmentation, get_config
+from classpose.log import get_logger
 
 logger = get_logger(__name__)
 
@@ -507,6 +507,24 @@ class ClassposeHDF5Dataset(ClassposeDataset):
                         "instance_counts"
                     )
         return self._instance_counts
+
+    @property
+    def n_classes(self) -> int:
+        """
+        Get the number of classes present in the labels.
+
+        Returns:
+            int: The number of classes.
+        """
+        if self._n_classes is None:
+            with h5py.File(self.hdf5_path) as f:
+                if "class_counts" in f:
+                    self._n_classes = f["class_counts"].shape[0]
+                else:
+                    self._n_classes = int(
+                        max([lbl[1].max() for lbl in self.labels]) + 1
+                    )
+        return self._n_classes
 
 
 class DistributedEpochSampler(Sampler[int]):
