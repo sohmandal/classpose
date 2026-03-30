@@ -208,7 +208,6 @@ from classpose.train_utils import (
     subsample_dataset,
     split_dataset,
     process_and_build_dataset,
-    get_class_weights,
     compute_oversampling_probabilities,
 )
 
@@ -336,7 +335,7 @@ def main(args):
             train_probs = compute_oversampling_probabilities(
                 class_counts=train_dataset.class_counts,
                 instance_counts=train_dataset.instance_counts,
-                oversampling_power=args.oversampling_power,
+                power=args.oversampling_power,
             )
 
         class_weights = None
