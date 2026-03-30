@@ -1,8 +1,9 @@
 import os
-from typing import Iterable
 import numpy as np
 import torch
+from typing import Iterable
 from skimage import io
+from skimage.measure import label
 from tqdm import trange
 from sklearn.model_selection import train_test_split
 from cellpose import dynamics, utils
@@ -339,7 +340,7 @@ def _build_dataset(
     )
 
 
-def get_class_counts(Y: np.ndarray, n_classes: int) -> np.ndarray:
+def get_class_counts(Y: list[np.ndarray], n_classes: int) -> np.ndarray:
     """
     Get class counts.
 
@@ -350,7 +351,9 @@ def get_class_counts(Y: np.ndarray, n_classes: int) -> np.ndarray:
     Returns:
         np.ndarray: Array of class counts.
     """
-    return np.bincount(Y, minlength=n_classes)
+    return np.bincount(
+        np.concatenate([y[1].ravel() for y in Y]), minlength=n_classes
+    )
 
 
 def get_instance_counts(
@@ -588,3 +591,58 @@ def split_dataset(
         test_dataset = None
 
     return train_dataset, test_dataset
+
+
+def oversample_classes(
+    X: np.ndarray,
+    Y: np.ndarray,
+    n_extra_classes: int = 4,
+    seed: int | np.random.Generator | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Oversample classes in Y.
+
+    Based on https://github.com/stardist/stardist/blob/conic-2022/examples/conic-2022/train.ipynb
+
+    Args:
+        X (np.ndarray): Array of images.
+        Y (np.ndarray): Array of labels (2 channels: instance and class).
+        n_extra_classes (int, optional): Number of extra classes to oversample.
+            Defaults to 4.
+        seed (int | np.random.Generator | None, optional): Random seed.
+            Defaults to None.
+
+    Returns:
+        tuple: A tuple containing the oversampled images and labels.
+    """
+    y0 = Y[:, 1]
+    rng = np.random.default_rng(seed)
+
+    # get the most infrequent classes
+    class_counts = get_class_counts(y0, y0.max() + 1)
+    extra_classes = np.argsort(class_counts)[:n_extra_classes]
+    all(
+        class_counts[c] > 0 or utils_logger.critical(f"count 0 for class {c}")
+        for c in extra_classes
+    )
+
+    # how many extra samples (more for infrequent classes)
+    n_extras = np.sqrt(np.sum(class_counts[1:]) / class_counts[extra_classes])
+    n_extras = n_extras / np.max(n_extras)
+    utils_logger.info(f"oversample classes: {extra_classes}")
+    idx_take = np.arange(len(X))
+
+    for c, n_extra in zip(extra_classes, n_extras):
+        # oversample probability is ~ number of instances
+        prob = np.sum(y0[:, ::2, ::2] == c, axis=(1, 2))
+        prob = np.clip(prob, 0, np.percentile(prob, 99.8))
+        prob = prob**2
+        # prob[prob<np.percentile(prob,90)] = 0
+        prob = prob / np.sum(prob)
+        n_extra = int(n_extra * len(X))
+        utils_logger.info(f"adding {n_extra} images of class {c}")
+        idx_extra = rng.choice(np.arange(len(X)), n_extra, p=prob)
+        idx_take = np.append(idx_take, idx_extra)
+
+    X, Y = map(lambda x: x[idx_take], (X, Y))
+    return X, Y
