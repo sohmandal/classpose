@@ -180,7 +180,7 @@ class ClassposeDataset(Dataset):
         return self._instance_counts
 
     @property
-    def class_counts(self):
+    def class_counts(self) -> np.ndarray:
         """
         Lazy loading of class counts.
 
@@ -191,6 +191,9 @@ class ClassposeDataset(Dataset):
             from classpose.train_utils import get_class_counts
 
             self._class_counts = get_class_counts(self.labels, self.n_classes)
+        if np.any(self._class_counts == 0):
+            logger.warning("Some classes have zero instances in the dataset")
+            logger.warning("Class counts: %s", self._class_counts)
         return self._class_counts
 
     @property
