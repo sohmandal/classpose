@@ -353,7 +353,7 @@ class ClassposeHDF5Dataset(ClassposeDataset):
             tuple[np.ndarray, np.ndarray]: The fetched images and labels.
         """
         if isinstance(i, slice):
-            i = [idx for idx in range(slice.start, slice.stop, slice.step or 1)]
+            i = [idx for idx in range(i.start, i.stop, i.step or 1)]
 
         if self.keep_open:
             f = self.hdf5_file
@@ -408,7 +408,7 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         Returns:
             list[np.ndarray]: list with images.
         """
-        return [self._get_item(i)[0] for i in range(len(self))]
+        return [self._get_item(i)[0] for i in self.indices]
 
     @property
     def labels(self) -> list[np.ndarray]:
@@ -418,9 +418,7 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         Returns:
             list[np.ndarray]: list with labels.
         """
-        return [
-            self._get_item(i)[1][:2].astype(np.int16) for i in range(len(self))
-        ]
+        return [self._get_item(i)[1][:2].astype(np.int16) for i in self.indices]
 
     @property
     def n_classes(self) -> int:
