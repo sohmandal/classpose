@@ -9,6 +9,11 @@ from cellpose.transforms import normalize_img, random_rotate_and_resize
 from torch.utils.data import Dataset, Sampler
 
 from classpose.transforms import create_stardist_augmentation, get_config
+from classpose.train_utils import (
+    get_class_weights,
+    get_instance_counts,
+    get_class_counts,
+)
 
 
 def _build_augment_pipeline(augment_pipeline_config: str | None):
@@ -90,8 +95,11 @@ class ClassposeDataset(Dataset):
             else {"normalize": True}
         )
         self.augment = augment
-        self._augment_pipeline = None
         self.diameter_array = None
+        self._augment_pipeline = None
+        self._class_weights = None
+        self._instance_counts = None
+        self._class_counts = None
 
         self.length = 0
         self.indices = np.array([], dtype=np.int32)
@@ -150,6 +158,40 @@ class ClassposeDataset(Dataset):
     def initialise_diameter_array_if_necessary(self):
         if self.diameter_array is None:
             self.diameter_array = np.ones(self.length) * self.diam_mean
+
+    @property
+    def class_weights(self):
+        """
+        Lazy loading of class weights.
+
+        Returns:
+            np.ndarray: The class weights.
+        """
+        if self._class_weights is None:
+            self._class_weights = get_class_weights(self.class_counts)
+        return self._class_weights
+
+    def instance_counts(self):
+        """
+        Lazy loading of instance counts.
+
+        Returns:
+            np.ndarray: The instance counts.
+        """
+        if self._instance_counts is None:
+            self._instance_counts = get_instance_counts(self.labels)
+        return self._instance_counts
+
+    def class_counts(self):
+        """
+        Lazy loading of class counts.
+
+        Returns:
+            np.ndarray: The class counts.
+        """
+        if self._class_counts is None:
+            self._class_counts = get_class_counts(self.labels)
+        return self._class_counts
 
 
 class ClassposeTrainingDataset(ClassposeDataset):

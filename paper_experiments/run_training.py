@@ -99,9 +99,9 @@ def parse_args():
     parser.add_argument(
         "--oversampling_method",
         type=str,
-        choices=["none", "stardist", "custom"],
+        choices=["none", "custom"],
         default="custom",
-        help="Oversampling method: 'none' (uniform), 'stardist' (rare class focus), 'custom' (instance-weighted)",
+        help="Oversampling method: 'none' (uniform), 'custom' (instance-weighted)",
     )
     parser.add_argument(
         "--n_rare_classes",
@@ -210,8 +210,6 @@ from classpose.train_utils import (
     process_and_build_dataset,
     get_class_weights,
     compute_oversampling_probabilities,
-    compute_custom_oversampling_probabilities,
-    compute_stardist_oversampling_probabilities,
 )
 
 
@@ -299,15 +297,6 @@ def main(args):
                 )
         logger.info("-------------------------------------------")
 
-        if args.oversampling_method == "stardist" and args.n_rare_classes <= 0:
-            raise ValueError(
-                "n_rare_classes must be positive when using 'stardist' oversampling"
-            )
-        if args.oversampling_method == "custom" and args.oversampling_power < 0:
-            raise ValueError(
-                "oversampling_power must be non-negative when using 'custom' oversampling"
-            )
-
         logger.info("Loading data")
 
         is_hdf5 = args.data_path.endswith(".h5") or args.data_path.endswith(
@@ -341,16 +330,18 @@ def main(args):
             logger.info("Skipping making training labels sparse.")
 
         n_classes = dataset.n_classes
-        train_probs = compute_oversampling_probabilities(
-            train_dataset,
-            oversampling_method=args.oversampling_method,
-            n_rare_classes=args.n_rare_classes,
-            oversampling_power=args.oversampling_power,
-        )
+
+        train_probs = None
+        if args.oversampling_method != "none":
+            train_probs = compute_oversampling_probabilities(
+                class_counts=train_dataset.class_counts,
+                instance_counts=train_dataset.instance_counts,
+                oversampling_power=args.oversampling_power,
+            )
 
         class_weights = None
         if not args.no_class_weights:
-            class_weights = get_class_weights(train_dataset.labels, n_classes)
+            class_weights = train_dataset.class_weights
         else:
             logger.info("Class weighting disabled - using uniform weights")
 

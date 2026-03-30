@@ -1,4 +1,5 @@
 import os
+from typing import Iterable
 import numpy as np
 import torch
 from skimage import io
@@ -353,13 +354,14 @@ def get_class_counts(Y: np.ndarray, n_classes: int) -> np.ndarray:
 
 
 def get_instance_counts(
-    labels: np.ndarray, label_instances: bool = False
+    labels: np.ndarray | list[np.ndarray], label_instances: bool = False
 ) -> np.ndarray:
     """
     Get instance counts.
 
     Args:
-        labels (np.ndarray): Array of labels (2 channels: instance and class).
+        labels (np.ndarray): Array of labels (2 channels: instance and class) or
+            list of such arrays.
         label_instances (bool, optional): Whether to label instances. Defaults to False.
 
     Returns:
@@ -379,7 +381,7 @@ def get_instance_counts(
 
 
 def get_class_weights(
-    Y: np.ndarray | list[np.ndarray], n_classes: int
+    Y: np.ndarray | list[np.ndarray] | Iterable[np.ndarray], n_classes: int
 ) -> np.ndarray:
     """
     Get class weights.
@@ -387,7 +389,7 @@ def get_class_weights(
     Based on https://github.com/stardist/stardist/blob/conic-2022/examples/conic-2022/train.ipynb
 
     Args:
-        Y (np.ndarray): Array of labels (2 channels: instance and class).
+        class_counts (np.ndarray): Array of class counts.
         n_classes (int): Number of classes.
 
     Returns:
@@ -395,9 +397,6 @@ def get_class_weights(
     """
     logger.info(
         "Computing class weights using inverse frequency with square root scaling"
-    )
-    class_counts = get_class_counts(
-        np.concatenate([y[1].ravel() for y in Y]), n_classes
     )
     inv_freq = np.median(class_counts) / class_counts
     inv_freq = inv_freq**0.5
@@ -407,25 +406,25 @@ def get_class_weights(
     return class_weights
 
 
-def compute_custom_oversampling_probabilities(
-    labels: np.ndarray, power: float = 1
+def compute_oversampling_probabilities(
+    class_counts: np.ndarray, instance_counts: np.ndarray, power: float = 1
 ) -> np.ndarray:
     """
     Compute custom oversampling probabilities using instance-weighted class balancing.
 
     Args:
-        labels (np.ndarray): Array of labels (2 channels: instance and class).
+        class_counts (np.ndarray): class count array (1 dimensional, one entry
+            for each class).
+        instance_counts (np.ndarray): instance count array (2 dimensional, one
+            entry for each sample and class).
         power (float, optional): Power to raise the weights to. Defaults to 1.
 
     Returns:
         np.ndarray: Normalized probability array for training sample selection.
     """
-    classes = np.concatenate([im[1].flatten() for im in labels])
-    n_classes = classes.max() + 1
-    class_counts = get_class_counts(classes, n_classes)
+    logger.info(f"Computing oversampling probabilities with power {power}")
     class_weights = 1 / class_counts
     class_weights[0] = 0
-    instance_counts = get_instance_counts(labels)
     weights = np.sum(instance_counts * class_weights[None], 1)
     weights = weights**power
     weights = weights / weights.sum()
@@ -433,119 +432,6 @@ def compute_custom_oversampling_probabilities(
         f"Custom oversampling - probability range: {weights.min():.6f} to {weights.max():.6f}"
     )
     return weights
-
-
-def compute_stardist_oversampling_probabilities(
-    train_labels: list[np.ndarray] | np.ndarray, n_rare_classes: int = 4
-) -> np.ndarray:
-    """
-    Compute oversampling probabilities using StarDist's methodology for rare class emphasis.
-    Based on https://github.com/stardist/stardist/blob/conic-2022/examples/conic-2022/train.ipynb:
-
-    Args:
-        train_labels: ClassPose labels with shape (N, C, H, W), channel 1 = class labels
-        n_rare_classes: Number of rarest classes to oversample (default: 4)
-
-    Returns:
-        Probability array of shape (N,) normalized to sum to 1.0 for use as train_probs
-    """
-    # Handle both array and list formats
-    if isinstance(train_labels, list):
-        train_labels = np.array(train_labels)
-
-    # Extract class channel - adapt from StarDist's Y0[:, :, :, 1] to ClassPose's [:, 1, :, :]
-    class_channel = train_labels[:, 1, :, :]  # Shape: (N, H, W)
-    n_images = class_channel.shape[0]
-
-    # Count instances per class using 4x downsampling (matches StarDist exactly)
-    # StarDist: np.bincount(Y0[:, ::4, ::4, 1].ravel(), minlength=len(CLASS_NAMES))
-    class_counts = np.bincount(
-        class_channel[:, ::4, ::4].ravel(),
-        minlength=int(class_channel.max()) + 1,
-    )
-
-    # Identify the most infrequent classes (excluding background class 0)
-    rare_classes = np.argsort(class_counts[1:])[:n_rare_classes] + 1
-
-    # Validate that rare classes have non-zero counts
-    for c in rare_classes:
-        if class_counts[c] == 0:
-            logger.warning(f"Rare class {c} has zero instances")
-
-    # Compute scaling factors using square root methodology (matches StarDist)
-    # StarDist: n_extras = np.sqrt(np.sum(class_counts[1:]) / class_counts[extra_classes])
-    total_instances = np.sum(class_counts[1:])  # Exclude background
-    scaling_factors = np.sqrt(total_instances / class_counts[rare_classes])
-
-    logger.info(f"Oversampling rare classes: {rare_classes.tolist()}")
-    logger.info(f"Scaling factors: {scaling_factors.tolist()}")
-
-    # Start with uniform probabilities
-    train_probs = np.ones(n_images, dtype=np.float64)
-
-    # Apply StarDist's probability computation for each rare class
-    for c, scaling_factor in zip(rare_classes, scaling_factors):
-        # Count instances of rare class per image using 2x downsampling (matches StarDist)
-        # StarDist: prob = np.sum(Y0[:, ::2, ::2, 1] == c, axis=(1, 2))
-        prob = np.sum(class_channel[:, ::2, ::2] == c, axis=(1, 2)).astype(
-            np.float64
-        )
-
-        # Apply StarDist's exact methodology
-        prob = np.clip(prob, 0, np.percentile(prob, 99.8))  # Clip outliers
-        prob = prob**2  # Square for emphasis
-
-        # Only update probabilities for images containing this rare class
-        if np.sum(prob) > 0:
-            prob = prob / np.max(prob)
-            # Weight the probabilities by the scaling factor
-            train_probs *= 1.0 + scaling_factor * prob
-
-    # Final normalization to ensure probabilities sum to 1.0
-    train_probs = train_probs / np.sum(train_probs)
-
-    logger.info(
-        f"Probability statistics - min: {train_probs.min():.6f}, "
-        f"max: {train_probs.max():.6f}, median: {np.median(train_probs):.6f}"
-    )
-
-    return train_probs
-
-
-def compute_oversampling_probabilities(
-    train_dataset: ClassposeDataset,
-    oversampling_method: str,
-    n_rare_classes: int = 4,
-    oversampling_power: float = 2.0,
-):
-    train_probs = None
-    if oversampling_method == "stardist":
-        logger.info(
-            "Computing oversampling probabilities using StarDist methodology"
-        )
-        train_probs = compute_stardist_oversampling_probabilities(
-            train_dataset.labels, n_rare_classes=n_rare_classes
-        )
-        logger.info(
-            f"StarDist oversampling enabled - probability range: {train_probs.min():.6f} to {train_probs.max():.6f}"
-        )
-    elif oversampling_method == "custom":
-        logger.info(
-            "Computing oversampling probabilities using custom instance-weighted method"
-        )
-        train_probs = compute_custom_oversampling_probabilities(
-            train_dataset.labels, power=oversampling_power
-        )
-        logger.info(
-            f"Custom oversampling enabled - probability range: {train_probs.min():.6f} to {train_probs.max():.6f}"
-        )
-    else:
-        logger.info("Using uniform sampling (no oversampling)")
-
-    if train_probs is not None:
-        train_probs /= train_probs.sum()
-
-    return train_probs
 
 
 def process_and_build_dataset(
