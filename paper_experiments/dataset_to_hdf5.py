@@ -7,6 +7,7 @@ from pathlib import Path
 
 from classpose.train_utils import _process_train_test
 from classpose.log import get_logger
+from classpose.train_utils import get_class_counts, get_instance_counts
 
 logger = get_logger(__name__)
 
@@ -24,12 +25,25 @@ def parse_args():
         help="Directories containing images.npy and labels.npy",
     )
     parser.add_argument(
+        "--n_classes",
+        type=int,
+        required=True,
+        help="Number of classes",
+    )
+    parser.add_argument(
         "--output_file",
         type=str,
         required=True,
         help="Path to output HDF5 file",
     )
     return parser.parse_args()
+
+
+def resize_and_increment(dataset, key, new_array):
+    logger.info("Appending array with shape %s to %s", new_array.shape, key)
+    new_shape = new_array.shape
+    dataset[key].resize((dataset[key].shape[0] + new_shape[0], *new_shape[1:]))
+    dataset[key][-new_shape[0] :] = new_array
 
 
 def load_data(data_dir):
@@ -60,6 +74,7 @@ def load_data(data_dir):
 def main():
     args = parse_args()
 
+    class_count_accumulator = np.zeros(args.n_classes)
     logger.info(f"Loading data from {len(args.data_dirs)} dirs...")
     Path(args.output_file).parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(args.output_file, "w") as f:
@@ -79,6 +94,11 @@ def main():
             shape=(0, *lbl_shape),
             maxshape=(None, *lbl_shape),
             chunks=(1, *lbl_shape),
+        )
+        f.create_dataset(
+            "instance_counts",
+            shape=(0, args.n_classes),
+            maxshape=(None, args.n_classes),
         )
         for data_dir in args.data_dirs:
             logger.info("Processing %s", data_dir)
@@ -104,23 +124,20 @@ def main():
                 )
             ]
 
+            class_count_accumulator += get_class_counts(
+                train_labels, args.n_classes
+            )
+
             image_data = np.stack(processed_images)
             label_data = np.stack(final_labels)
+            instance_counts = get_instance_counts(train_labels, args.n_classes)
 
-            logger.info(
-                "Appending input array of size %s to HDF5", image_data.shape
-            )
-            f["images"].resize(
-                (f["images"].shape[0] + image_data.shape[0], *img_shape)
-            )
-            f["images"][-image_data.shape[0] :] = image_data
-            logger.info(
-                "Appending label array of size %s to HDF5", image_data.shape
-            )
-            f["labels"].resize(
-                (f["labels"].shape[0] + label_data.shape[0], *lbl_shape)
-            )
-            f["labels"][-label_data.shape[0] :] = label_data
+            resize_and_increment(f, "images", image_data)
+            resize_and_increment(f, "labels", label_data)
+            resize_and_increment(f, "instance_counts", instance_counts)
+
+        logger.info("Storing class counts")
+        f["class_counts"] = class_count_accumulator
 
     logger.info("Done!")
 
