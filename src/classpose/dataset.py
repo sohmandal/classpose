@@ -143,7 +143,7 @@ class ClassposeDataset(Dataset):
             ClassposeDataset: A shallow copy of the dataset containing only the specified indices.
         """
         dataset_copy = deepcopy(self)
-        dataset_copy.indices = indices
+        dataset_copy.indices = dataset_copy.indices[indices]
         dataset_copy.length = len(indices)
         return dataset_copy
 
