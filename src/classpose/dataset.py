@@ -482,9 +482,7 @@ class ClassposeHDF5Dataset(ClassposeDataset):
                 if "class_counts" in f:
                     self._class_counts = f["class_counts"][:]
                 else:
-                    self._class_counts = super().__getattribute__(
-                        "class_counts"
-                    )
+                    self._class_counts = super().class_counts
         if np.any(self._class_counts == 0):
             logger.warning("Some classes have zero instances in the dataset")
             logger.warning("Class counts: %s", self._class_counts)
@@ -503,9 +501,7 @@ class ClassposeHDF5Dataset(ClassposeDataset):
                 if "instance_counts" in f:
                     self._instance_counts = f["instance_counts"][:]
                 else:
-                    self._instance_counts = super().__getattribute__(
-                        "instance_counts"
-                    )
+                    self._instance_counts = super().instance_counts
         return self._instance_counts
 
     @property
