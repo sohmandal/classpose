@@ -207,8 +207,6 @@ class ClassposeTrainingDataset(ClassposeDataset):
     - label_array: (N, 5, H, W) where N is the number of images, 5 is the
         number of channels (instance, cell type/class, binary mask, flow_y, flow_x),
         H and W are the height and width of the images
-    - diameter_array: (N,) where N is the number of images (this is kept for
-        compatibility with the original Cellpose API)
     """
 
     def __init__(
@@ -295,9 +293,7 @@ class ClassposeTrainingDataset(ClassposeDataset):
         """
         Get all labels in the dataset, omitting extra channels if present.
         """
-        return [
-            lbl[:2].astype(np.int16) for lbl in self.label_array[self.indices]
-        ]
+        return [self.label_array[i][:2].astype(np.int16) for i in self.indices]
 
 
 class ClassposeHDF5Dataset(ClassposeDataset):
@@ -311,6 +307,9 @@ class ClassposeHDF5Dataset(ClassposeDataset):
     - labels: (N, 5, H, W) where N is the number of images, 5 is the
         number of channels (instance, cell type/class, binary mask, flow_y, flow_x),
         H and W are the height and width of the images
+    - class_counts (optional): (C,) where C is the number of classes
+    - instance_counts (optional): (N, C) where N is the number of images and C
+        is the number of cells belonging to each class in each image
     """
 
     def __init__(
@@ -476,10 +475,50 @@ class ClassposeHDF5Dataset(ClassposeDataset):
             int: The number of classes.
         """
         if self._n_classes is None:
-            self._n_classes = int(
-                max([lbl[1].max() for lbl in self.labels]) + 1
-            )
+            with h5py.File(self.hdf5_path) as f:
+                if "class_counts" in f:
+                    self._n_classes = f["class_counts"].shape[0]
+                else:
+                    self._n_classes = int(
+                        max([lbl[1].max() for lbl in self.labels]) + 1
+                    )
         return self._n_classes
+
+    @property
+    def class_counts(self) -> np.ndarray:
+        """
+        Lazy loading of class counts.
+
+        Returns:
+            np.ndarray: Array of class counts.
+        """
+        if self._class_counts is None:
+            with h5py.File(self.hdf5_path) as f:
+                if "class_counts" in f:
+                    self._class_counts = f["class_counts"][:]
+                else:
+                    self._class_counts = super().__getattribute__(
+                        "class_counts"
+                    )
+        return self._class_counts
+
+    @property
+    def instance_counts(self) -> np.ndarray:
+        """
+        Lazy loading for instance counts.
+
+        Returns:
+            np.ndarray: Array of instance counts.
+        """
+        if self._instance_counts is None:
+            with h5py.File(self.hdf5_path) as f:
+                if "instance_counts" in f:
+                    self._instance_counts = f["instance_counts"][:]
+                else:
+                    self._instance_counts = super().__getattribute__(
+                        "instance_counts"
+                    )
+        return self._instance_counts
 
 
 class DistributedEpochSampler(Sampler[int]):

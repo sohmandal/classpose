@@ -383,9 +383,7 @@ def get_instance_counts(
     return counts
 
 
-def get_class_weights(
-    Y: np.ndarray | list[np.ndarray] | Iterable[np.ndarray], n_classes: int
-) -> np.ndarray:
+def get_class_weights(class_counts: np.ndarray) -> np.ndarray:
     """
     Get class weights.
 
