@@ -149,13 +149,14 @@ class ClassposeDataset(Dataset):
         Returns:
             ClassposeDataset: A shallow copy of the dataset containing only the specified indices.
         """
+        indices = sorted(indices)
         dataset_copy = deepcopy(self)
         dataset_copy.indices = dataset_copy.indices[indices]
         dataset_copy.length = len(indices)
-        self._instance_counts = None
-        self._class_counts = None
-        self._class_weights = None
-        self._is_subset = True
+        dataset_copy._instance_counts = None
+        dataset_copy._class_counts = None
+        dataset_copy._class_weights = None
+        dataset_copy._is_subset = True
         return dataset_copy
 
     def initialise_diameter_array_if_necessary(self):
