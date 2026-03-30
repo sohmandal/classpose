@@ -257,7 +257,7 @@ def download_if_unavailable(
         utils_logger.info("%s %s", description, path)
         try:
             response = requests.get(url, stream=True, verify=True)
-        except:
+        except Exception:
             if not ALLOW_UNSAFE_REQUESTS:
                 utils_logger.error(f"Cannot download slide from {url}")
                 utils_logger.error(

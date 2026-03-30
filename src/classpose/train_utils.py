@@ -1,7 +1,6 @@
 import os
 import numpy as np
 import torch
-from typing import Iterable
 from skimage import io
 from skimage.measure import label
 from tqdm import trange
@@ -625,14 +624,14 @@ def oversample_classes(
     class_counts = get_class_counts(y0, y0.max() + 1)
     extra_classes = np.argsort(class_counts)[:n_extra_classes]
     all(
-        class_counts[c] > 0 or utils_logger.critical(f"count 0 for class {c}")
+        class_counts[c] > 0 or logger.critical(f"count 0 for class {c}")
         for c in extra_classes
     )
 
     # how many extra samples (more for infrequent classes)
     n_extras = np.sqrt(np.sum(class_counts[1:]) / class_counts[extra_classes])
     n_extras = n_extras / np.max(n_extras)
-    utils_logger.info(f"oversample classes: {extra_classes}")
+    logger.info(f"oversample classes: {extra_classes}")
     idx_take = np.arange(len(X))
 
     for c, n_extra in zip(extra_classes, n_extras):
@@ -643,7 +642,7 @@ def oversample_classes(
         # prob[prob<np.percentile(prob,90)] = 0
         prob = prob / np.sum(prob)
         n_extra = int(n_extra * len(X))
-        utils_logger.info(f"adding {n_extra} images of class {c}")
+        logger.info(f"adding {n_extra} images of class {c}")
         idx_extra = rng.choice(np.arange(len(X)), n_extra, p=prob)
         idx_take = np.append(idx_take, idx_extra)
 

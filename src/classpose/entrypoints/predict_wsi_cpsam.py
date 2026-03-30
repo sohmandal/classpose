@@ -40,7 +40,6 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="spatialdata")
 warnings.filterwarnings("ignore", message=".*ImplicitModification.*")
 warnings.filterwarnings("ignore", message=".*Transforming to str index.*")
 
-import os
 import argparse
 import json
 import logging
@@ -54,7 +53,6 @@ import shapely
 import torch
 import torch.multiprocessing as tmproc
 from cellpose.models import CellposeModel
-from openslide import OpenSlide
 from tqdm import tqdm
 
 for handler in logging.root.handlers[:]:

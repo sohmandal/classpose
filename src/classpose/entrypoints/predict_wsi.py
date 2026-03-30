@@ -53,7 +53,6 @@ import shapely
 import torch
 import torch.multiprocessing as tmproc
 from matplotlib import colormaps
-from openslide import OpenSlide
 from scipy.spatial import KDTree
 from skimage import color, measure
 from tqdm import tqdm
