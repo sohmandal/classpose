@@ -144,10 +144,12 @@ class ClassposeDataset(Dataset):
         Create a subset of the dataset using the given indices.
 
         Args:
-            indices (list[int] | np.ndarray): The indices to include in the new subset.
+            indices (list[int] | np.ndarray): The indices to include in the new
+                subset.
 
         Returns:
-            ClassposeDataset: A shallow copy of the dataset containing only the specified indices.
+            ClassposeDataset: A copy of the dataset containing only the
+                specified indices.
         """
         indices = sorted(indices)
         dataset_copy = deepcopy(self)
