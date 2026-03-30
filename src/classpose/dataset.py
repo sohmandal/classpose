@@ -98,6 +98,7 @@ class ClassposeDataset(Dataset):
         self._class_weights = None
         self._instance_counts = None
         self._class_counts = None
+        self._is_subset = False
 
         self.length = 0
         self.indices = np.array([], dtype=np.int32)
@@ -151,6 +152,10 @@ class ClassposeDataset(Dataset):
         dataset_copy = deepcopy(self)
         dataset_copy.indices = dataset_copy.indices[indices]
         dataset_copy.length = len(indices)
+        self._instance_counts = None
+        self._class_counts = None
+        self._class_weights = None
+        self._is_subset = True
         return dataset_copy
 
     def initialise_diameter_array_if_necessary(self):
@@ -479,7 +484,7 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         """
         if self._class_counts is None:
             with h5py.File(self.hdf5_path) as f:
-                if "class_counts" in f:
+                if "class_counts" in f and self._is_subset is False:
                     self._class_counts = f["class_counts"][:]
                 else:
                     self._class_counts = super().class_counts
@@ -499,7 +504,7 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         if self._instance_counts is None:
             with h5py.File(self.hdf5_path) as f:
                 if "instance_counts" in f:
-                    self._instance_counts = f["instance_counts"][:]
+                    self._instance_counts = f["instance_counts"][self.indices]
                 else:
                     self._instance_counts = super().instance_counts
         return self._instance_counts
