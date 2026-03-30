@@ -13,6 +13,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from classpose.dataset import (
     DistributedEpochSampler,
     SequentialDistributedSampler,
+    ClassposeTrainingDataset,
 )
 from classpose.distributed import cleanup_distributed, setup_distributed
 from classpose.train import train_class_seg
@@ -23,24 +24,37 @@ def _make_synthetic_sample(index: int) -> tuple[np.ndarray, np.ndarray]:
     image[1] = np.linspace(0.0, 1.0, 32, dtype=np.float32)[None, :]
     image[2] = np.linspace(0.0, 1.0, 32, dtype=np.float32)[:, None]
 
-    instance = np.zeros((32, 32), dtype=np.int16)
-    classes = np.zeros((32, 32), dtype=np.int16)
+    labels = np.zeros((5, 32, 32), dtype=np.float32)
 
     center_y = 10 + (index % 3)
     center_x = 11 + (index % 4)
     rr, cc = np.ogrid[:32, :32]
     mask = (rr - center_y) ** 2 + (cc - center_x) ** 2 <= 16
-    instance[mask] = 1
-    classes[mask] = 1 + (index % 2)
-    image[0, mask] = 1.0
 
-    return image, np.stack([instance, classes], axis=0)
+    # instance mask (channel 0)
+    labels[0, mask] = 1.0
+
+    # class (channel 1)
+    labels[1, mask] = 1 + (index % 2)
+
+    # instance (1 to n where n is the number of instances)
+    labels[2, mask] = 1.0
+
+    # flows (channels 3, 4)
+    labels[3, mask] = 0.5  # dummy flow y
+    labels[4, mask] = 0.5  # dummy flow x
+
+    return image, labels
 
 
 def _make_synthetic_dataset(
     train_count: int = 4, test_count: int = 2
-) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
-    samples = [_make_synthetic_sample(i) for i in range(train_count + test_count)]
+) -> tuple[
+    list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]
+]:
+    samples = [
+        _make_synthetic_sample(i) for i in range(train_count + test_count)
+    ]
     train_samples = samples[:train_count]
     test_samples = samples[train_count:]
     train_images = [image for image, _ in train_samples]
@@ -106,8 +120,22 @@ def _run_cuda_ddp_smoke(
         timeout_seconds=120,
     )
     try:
-        train_images, train_labels, test_images, test_labels = (
-            _make_synthetic_dataset()
+        (
+            train_images,
+            train_labels,
+            test_images,
+            test_labels,
+        ) = _make_synthetic_dataset()
+
+        train_dataset = ClassposeTrainingDataset(
+            data_array=np.array(train_images),
+            label_array=np.array(train_labels),
+            diameter_array=np.full(len(train_images), 30.0),
+        )
+        test_dataset = ClassposeTrainingDataset(
+            data_array=np.array(test_images),
+            label_array=np.array(test_labels),
+            diameter_array=np.full(len(test_images), 30.0),
         )
 
         train_sampler = DistributedEpochSampler(
@@ -143,17 +171,14 @@ def _run_cuda_ddp_smoke(
         )
         train_class_seg(
             net=ddp_net,
-            train_data=train_images,
-            train_labels=train_labels,
-            test_data=test_images,
-            test_labels=test_labels,
+            train_dataset=train_dataset,
+            test_dataset=test_dataset,
             batch_size=2,
             n_epochs=1,
             save_path=output_dir,
             model_name="cuda_ddp_smoke",
             save_every=1,
             num_workers=0,
-            min_train_masks=0,
             validate_every_epoch=True,
             use_uncertainty_weighting=True,
             device=context.device,
@@ -191,7 +216,9 @@ def test_distributed_epoch_sampler_is_deterministic():
     sampler_a.set_epoch(3)
     sampler_b.set_epoch(3)
 
-    assert sampler_a.local_indices().tolist() == sampler_b.local_indices().tolist()
+    assert (
+        sampler_a.local_indices().tolist() == sampler_b.local_indices().tolist()
+    )
 
 
 def test_distributed_epoch_sampler_shards_without_overlap_for_uniform_sampling():
@@ -272,22 +299,36 @@ def test_sequential_distributed_sampler_covers_validation_set_once():
 
 
 def test_train_class_seg_single_process_smoke(tmp_path):
-    train_images, train_labels, test_images, test_labels = _make_synthetic_dataset()
+    (
+        train_images,
+        train_labels,
+        test_images,
+        test_labels,
+    ) = _make_synthetic_dataset()
+
+    train_dataset = ClassposeTrainingDataset(
+        data_array=np.array(train_images),
+        label_array=np.array(train_labels),
+        diameter_array=np.full(len(train_images), 30.0),
+    )
+    test_dataset = ClassposeTrainingDataset(
+        data_array=np.array(test_images),
+        label_array=np.array(test_labels),
+        diameter_array=np.full(len(test_images), 30.0),
+    )
+
     net = ToyClassposeNet(device="cpu")
 
     model_path, train_losses, test_losses = train_class_seg(
         net=net,
-        train_data=train_images,
-        train_labels=train_labels,
-        test_data=test_images,
-        test_labels=test_labels,
+        train_dataset=train_dataset,
+        test_dataset=test_dataset,
         batch_size=2,
         n_epochs=1,
         save_path=tmp_path,
         model_name="single_process_smoke",
         save_every=1,
         num_workers=0,
-        min_train_masks=0,
         validate_every_epoch=True,
         use_uncertainty_weighting=True,
         device=torch.device("cpu"),
