@@ -334,8 +334,8 @@ def main(args):
             if is_hdf5:
                 raise ValueError("Cannot make sparse labels for HDF5 dataset")
             logger.info("Making training labels sparse.")
-            train_dataset.labels = make_sparse(
-                train_dataset.labels, fraction=0.1, seed=args.seed
+            train_dataset.label_array = make_sparse(
+                train_dataset.label_array, fraction=0.1, seed=args.seed
             )
         else:
             logger.info("Skipping making training labels sparse.")
