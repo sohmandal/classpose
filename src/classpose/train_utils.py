@@ -357,7 +357,9 @@ def get_class_counts(Y: list[np.ndarray], n_classes: int) -> np.ndarray:
 
 
 def get_instance_counts(
-    labels: np.ndarray | list[np.ndarray], label_instances: bool = False
+    labels: np.ndarray | list[np.ndarray],
+    label_instances: bool = False,
+    n_classes: int | None = None,
 ) -> np.ndarray:
     """
     Get instance counts.
@@ -366,11 +368,14 @@ def get_instance_counts(
         labels (np.ndarray): Array of labels (2 channels: instance and class) or
             list of such arrays.
         label_instances (bool, optional): Whether to label instances. Defaults to False.
+        n_classes (int | None, optional): Number of classes. If None, it will be
+            inferred from the labels. Defaults to None.
 
     Returns:
         np.ndarray: Array of instance counts.
     """
-    n_classes = np.max([im[1].max() for im in labels]) + 1
+    if n_classes is None:
+        n_classes = np.max([im[1].max() for im in labels]) + 1
     counts = np.zeros((len(labels), n_classes))
     for i in range(len(labels)):
         if label_instances:

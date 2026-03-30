@@ -130,7 +130,9 @@ def main():
 
             image_data = np.stack(processed_images)
             label_data = np.stack(final_labels)
-            instance_counts = get_instance_counts(train_labels, args.n_classes)
+            instance_counts = get_instance_counts(
+                train_labels, n_classes=args.n_classes
+            )
 
             resize_and_increment(f, "images", image_data)
             resize_and_increment(f, "labels", label_data)
