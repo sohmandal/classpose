@@ -243,14 +243,16 @@ class ClassposeTrainingDataset(ClassposeDataset):
         """
         Get all images in the dataset.
         """
-        return self.data_array
+        return self.data_array[self.indices]
 
     @property
     def labels(self) -> list[np.ndarray]:
         """
         Get all labels in the dataset, omitting extra channels if present.
         """
-        return [lbl[:2].astype(np.int16) for lbl in self.label_array]
+        return [
+            lbl[:2].astype(np.int16) for lbl in self.label_array[self.indices]
+        ]
 
 
 class ClassposeHDF5Dataset(ClassposeDataset):
