@@ -8,7 +8,10 @@ import h5py
 from cellpose.transforms import normalize_img, random_rotate_and_resize
 from torch.utils.data import Dataset, Sampler
 
+from classpose.log import get_logger
 from classpose.transforms import create_stardist_augmentation, get_config
+
+logger = get_logger(__name__)
 
 
 def _build_augment_pipeline(augment_pipeline_config: str | None):
@@ -467,24 +470,6 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         return [self._get_item(i)[1][:2].astype(np.int16) for i in self.indices]
 
     @property
-    def n_classes(self) -> int:
-        """
-        Get the number of classes present in the labels.
-
-        Returns:
-            int: The number of classes.
-        """
-        if self._n_classes is None:
-            with h5py.File(self.hdf5_path) as f:
-                if "class_counts" in f:
-                    self._n_classes = f["class_counts"].shape[0]
-                else:
-                    self._n_classes = int(
-                        max([lbl[1].max() for lbl in self.labels]) + 1
-                    )
-        return self._n_classes
-
-    @property
     def class_counts(self) -> np.ndarray:
         """
         Lazy loading of class counts.
@@ -500,6 +485,9 @@ class ClassposeHDF5Dataset(ClassposeDataset):
                     self._class_counts = super().__getattribute__(
                         "class_counts"
                     )
+        if np.any(self._class_counts == 0):
+            logger.warning("Some classes have zero instances in the dataset")
+            logger.warning("Class counts: %s", self._class_counts)
         return self._class_counts
 
     @property
