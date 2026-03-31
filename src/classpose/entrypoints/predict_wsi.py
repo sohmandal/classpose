@@ -260,7 +260,7 @@ class SlideLoader:
             )
             self.tissue_cnts.extend(
                 [
-                    shapely.Polygon(cnt["contour"], cnt["holes"])
+                    make_valid(shapely.Polygon(cnt["contour"], cnt["holes"]))
                     for cnt in tissue_cnts.values()
                 ]
             )
