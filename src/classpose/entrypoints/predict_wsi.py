@@ -260,7 +260,7 @@ class SlideLoader:
             )
             self.tissue_cnts.extend(
                 [
-                    shapely.Polygon(cnt["contour"], cnt["holes"])
+                    make_valid(shapely.Polygon(cnt["contour"], cnt["holes"]))
                     for cnt in tissue_cnts.values()
                 ]
             )
@@ -350,6 +350,18 @@ class SlideLoader:
             ]
         )
 
+    def _check_tile_in_cnts(
+        self,
+        coords: tuple[int, int],
+        tile_size: int,
+        cnts: list[shapely.Geometry],
+    ):
+        tile = self._point_to_square_polygon(coords, tile_size)
+        has_roi = any([cnt.intersects(tile) for cnt in cnts])
+        if not has_roi:
+            return False
+        return True
+
     def fill_queue(self):
         """
         Fills the queue with tiles for inference.
@@ -368,18 +380,14 @@ class SlideLoader:
         with tqdm(self.coords, desc="Tiles to predict: 0", position=0) as pbar:
             for coords, tile_size in pbar:
                 if self.tissue_cnts:
-                    tile = self._point_to_square_polygon(coords, tile_size)
-                    has_tissue = any(
-                        [cnt.intersects(tile) for cnt in self.tissue_cnts]
-                    )
-                    if not has_tissue:
+                    if not self._check_tile_in_cnts(
+                        coords, tile_size, self.tissue_cnts
+                    ):
                         continue
                 if self.roi_cnts:
-                    tile = self._point_to_square_polygon(coords, tile_size)
-                    has_roi = any(
-                        [cnt.intersects(tile) for cnt in self.roi_cnts]
-                    )
-                    if not has_roi:
+                    if not self._check_tile_in_cnts(
+                        coords, tile_size, self.roi_cnts
+                    ):
                         continue
                 tile = self.slide.read_region(
                     coords, self.level, (tile_size, tile_size)
@@ -834,6 +842,42 @@ def shapely_polygon_to_geojson(
     ]
 
 
+def make_valid(
+    polygon: shapely.Polygon | shapely.MultiPolygon | shapely.Geometry,
+) -> shapely.Polygon | shapely.MultiPolygon | shapely.GeometryCollection:
+    """
+    Makes a polygon valid and returns either a polygon or a multi-polygon,
+    both ready for use in downstream functions.
+
+    Args:
+        polygon (shapely.Polygon | shapely.MultiPolygon | shapely.Geometry): The
+            polygon to make valid.
+
+    Returns:
+        shapely.Polygon | shapely.MultiPolygon | shapely.GeometryCollection: The valid polygon.
+    """
+    if isinstance(polygon, shapely.Polygon):
+        if polygon.is_valid:
+            return polygon
+        return shapely.make_valid(polygon, method="structure")
+
+    if isinstance(polygon, shapely.MultiPolygon):
+        geoms = []
+        for geom in polygon.geoms:
+            geom = make_valid(geom)
+            if isinstance(geom, shapely.MultiPolygon):
+                geoms.extend(geom.geoms)
+            else:
+                geoms.append(geom)
+        if not geoms:
+            return shapely.MultiPolygon([])
+        if len(geoms) == 1:
+            return geoms[0]
+        return shapely.MultiPolygon(geoms)
+
+    return shapely.make_valid(polygon, method="structure")
+
+
 def load_roi_polygons(
     roi_geojson_path: str, group_by_class: bool = False
 ) -> (
@@ -865,6 +909,7 @@ def load_roi_polygons(
         if not geom:
             continue
         shp = shapely.geometry.shape(geom)
+        shp = make_valid(shp)
 
         class_name = None
         if group_by_class:
