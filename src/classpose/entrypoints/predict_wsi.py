@@ -844,7 +844,7 @@ def shapely_polygon_to_geojson(
 
 def make_valid(
     polygon: shapely.Polygon | shapely.MultiPolygon | shapely.Geometry,
-) -> shapely.Polygon | shapely.MultiPolygon:
+) -> shapely.Polygon | shapely.MultiPolygon | shapely.GeometryCollection:
     """
     Makes a polygon valid and returns either a polygon or a multi-polygon,
     both ready for use in downstream functions.
@@ -854,12 +854,12 @@ def make_valid(
             polygon to make valid.
 
     Returns:
-        shapely.Polygon | shapely.MultiPolygon: The valid polygon.
+        shapely.Polygon | shapely.MultiPolygon | shapely.GeometryCollection: The valid polygon.
     """
     if isinstance(polygon, shapely.Polygon):
         if polygon.is_valid:
             return polygon
-        return shapely.make_valid(polygon)
+        return shapely.make_valid(polygon, method="structure")
 
     if isinstance(polygon, shapely.MultiPolygon):
         geoms = []
@@ -869,9 +869,13 @@ def make_valid(
                 geoms.extend(geom.geoms)
             else:
                 geoms.append(geom)
+        if not geoms:
+            return shapely.MultiPolygon([])
+        if len(geoms) == 1:
+            return geoms[0]
         return shapely.MultiPolygon(geoms)
 
-    return shapely.make_valid(polygon)
+    return shapely.make_valid(polygon, method="structure")
 
 
 def load_roi_polygons(
