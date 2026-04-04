@@ -869,7 +869,7 @@ def make_valid(
                 geoms.extend(geom.geoms)
             else:
                 geoms.append(geom)
-        return shapely.MultiPolygon(polygon)
+        return shapely.MultiPolygon(geoms)
 
     return shapely.make_valid(polygon)
 
