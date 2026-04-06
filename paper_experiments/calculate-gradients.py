@@ -98,7 +98,7 @@ if __name__ == "__main__":
         for feature in FEATURES:
             expr = [pl.col(k) for k in X_col_names]
             coefficients = cells.select(
-                pl.col(feature)
+                ((pl.col(feature) - pl.mean(feature)) / pl.std(feature))
                 .least_squares.ols(*expr, mode="statistics")
                 .alias("coef")
             ).unnest("coef")
