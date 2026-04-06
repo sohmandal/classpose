@@ -250,8 +250,9 @@ def load_geojson_multipolygon(
 def load_cells(
     cells_path: str,
     cancer_contours_path: str,
-    tissue_contours_path: str,
-) -> pl.DataFrame:
+    tissue_contours_path: str | None = None,
+    calculate_distances: bool = False,
+) -> tuple[pl.DataFrame, pl.DataFrame, int]:
     """
     Load cell data from a parquet file, calculate distances to lymphocytes,
     and assign cells to tissue regions defined in a geojson file. The tissue
@@ -263,13 +264,16 @@ def load_cells(
         cells_path (str): Path to the parquet file containing cell features.
         cancer_contours_path (str): Path to the geojson file containing region
             contours.
-        tissue_contours_path (str): Path to the geojson file containing tissue
-            region contours.
+        tissue_contours_path (str | None): Path to the geojson file containing
+            tissue region contours. Defaults to None.
+        calculate_distances (bool): Whether to calculate distances to cancer
+            boundaries. Default is False.
 
     Returns:
         cells (pl.DataFrame): DataFrame of cell features with added distance to
             nearest lymphocyte.
         polygon_areas (pl.DataFrame): DataFrame of tissue region areas.
+        tissue_area (int): Total area of tissue regions.
     """
     cells = pl.read_parquet(cells_path)
     cells = expand_features(cells)
@@ -312,6 +316,19 @@ def load_cells(
         masks[cl][contained_indices] = 1
     for cl in masks:
         cells = cells.with_columns(pl.Series(f"{cl}_mask", masks[cl]))
+    if calculate_distances:
+        distance_to_boundary = np.ones(cells.shape[0]) * np.inf
+        for polygon, cl in cancer_contours:
+            distances = polygon.exterior.distance(points)
+            distance_to_boundary = np.where(
+                distances < distance_to_boundary,
+                distances,
+                distance_to_boundary,
+            )
+        cells = cells.with_columns(
+            pl.Series("distance_to_boundary", distance_to_boundary)
+        )
+
     polygon_areas_df = []
     for k in polygon_areas:
         pa_dict = {"tissue_area": polygon_areas[k], f"{k}_mask": 1}
