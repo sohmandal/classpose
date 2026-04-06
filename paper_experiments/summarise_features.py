@@ -278,22 +278,18 @@ def load_cells(
     lymphocyte_centroids = centroids[cells["classification"] == "Lymphocyte"]
     tree = KDTree(lymphocyte_centroids)
     dist_to_lymph, nearest = tree.query(centroids)
-    # remove duplicates if any (very rare but can happen)
-    """if nearest.shape[1] != cells.shape[0]:
-        _, unique_indices = np.unique(nearest[0], return_index=True)
-        dist_to_lymph = dist_to_lymph[unique_indices]"""
     cells = cells.with_columns(pl.Series("dist_to_lymph", dist_to_lymph))
 
     cancer_contours = load_geojson_multipolygon(cancer_contours_path)
-    tissue_contours = load_geojson_multipolygon(tissue_contours_path)
-    tissue_area = sum([c[0].area for c in tissue_contours])
 
-    if tissue_contours:
+    tissue_area = 0
+    if tissue_contours_path:
+        tissue_contours = load_geojson_multipolygon(tissue_contours_path)
+        tissue_area = sum([c[0].area for c in tissue_contours])
         tissue_polys = [p for p, _ in tissue_contours]
         tissue_tree = shapely.STRtree(tissue_polys)
         intersected_contours = []
         for polygon, cl in cancer_contours:
-            # Only intersect with tissue polygons whose bounding boxes overlap the cancer contour
             overlapping_idx = tissue_tree.query(polygon)
             if len(overlapping_idx) > 0:
                 relevant_tissue = shapely.ops.unary_union(
