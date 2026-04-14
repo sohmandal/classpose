@@ -72,6 +72,9 @@ if __name__ == "__main__":
             f"dummy_classification_{i}" for i in range(len(cell_type_dict))
         ]
         inter_col_names = [f"{k}_log_dist" for k in dummy_col_names]
+        inter_col_cancer_names = [
+            f"{k}_cancer_log_dist" for k in dummy_col_names
+        ]
         cells = cells.with_columns(
             pl.col("classification")
             .replace(cell_type_dict)
@@ -93,8 +96,20 @@ if __name__ == "__main__":
                 )
                 for i in range(len(CELL_TYPES))
             ]
+            + [
+                (
+                    pl.col(dummy_col_names[i])
+                    * pl.col("log_dist")
+                    * pl.col("cancer_mask")
+                ).alias(inter_col_cancer_names[i])
+                for i in range(len(CELL_TYPES))
+            ]
         )
-        X_col_names = [*dummy_col_names, *inter_col_names]
+        X_col_names = [
+            *dummy_col_names,
+            *inter_col_names,
+            *inter_col_cancer_names,
+        ]
         for feature in FEATURES:
             expr = [pl.col(k) for k in X_col_names]
             coefficients = cells.select(
