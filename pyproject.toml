@@ -46,6 +46,10 @@ notebook = [
 czi-zeiss = [
     "pylibczirw>=5.1.1",
 ]
+feature-extraction = [
+    "polars>=1.39.3",
+    "polars-ols>=0.3.5",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
