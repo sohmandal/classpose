@@ -6,11 +6,10 @@ from classpose.log import get_logger
 from tqdm import tqdm
 
 FEATURES = [
-    "area",
     "perimeter",
-    "eccentricity",
     "solidity",
     "elongation",
+    "entropy_h",
 ]
 CELL_TYPES = [
     "Epithelial",
