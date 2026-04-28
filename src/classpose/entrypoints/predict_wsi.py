@@ -792,9 +792,12 @@ def shapely_polygon_to_geojson(
     object_type: str = "annotation",
     additional_properties: dict | None = None,
 ) -> list[dict]:
-    if isinstance(polygon, shapely.MultiPolygon):
+    if isinstance(polygon, (shapely.MultiPolygon, shapely.GeometryCollection)):
         features = []
         for poly in polygon.geoms:
+            # skip linestrings as they lead to problems down the line
+            if isinstance(poly, shapely.LineString):
+                continue
             features.extend(
                 shapely_polygon_to_geojson(
                     poly,
