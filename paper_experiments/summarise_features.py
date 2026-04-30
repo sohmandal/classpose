@@ -1,3 +1,29 @@
+"""
+Compute per-sample summary statistics and cell densities from cell feature
+parquet files and GeoJSON region annotations.
+
+For each tissue sample this script:
+1. Loads cell detections (parquet) and matches them to cancer region contours
+   (GeoJSON) and tissue contours (GeoJSON).
+2. Computes morphological and colour features per cell, including elongation,
+   distance to nearest lymphocyte, and the 7 Hu invariant moments.
+3. Groups cells by classification and region mask, then calculates per-group
+   mean, standard deviation, count, and density (cells per µm²) for all
+   features in FEATURES.
+4. Repeats the aggregation at WSI level (ignoring region masks) to produce
+   overall summary statistics.
+5. Concatenates region-level and WSI-level summaries and writes the result
+   to a parquet file.
+
+Usage
+-----
+    python summarise_features.py \\
+        --cells_path <dir_with_parquet_files> \\
+        --cancer_contours_path <dir_with_geojson_files> \\
+        --tissue_contours_path <dir_with_tissue_geojson_files> \\
+        --output <output.parquet>
+"""
+
 import json
 import numpy as np
 import shapely
@@ -456,11 +482,38 @@ def process_sample(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--cells_path", type=str, required=True)
-    parser.add_argument("--tissue_contours_path", type=str, required=True)
-    parser.add_argument("--cancer_contours_path", type=str, required=True)
-    parser.add_argument("--output", type=str, default="slide_features.parquet")
+    parser = argparse.ArgumentParser(
+        description="Compute per-sample summary statistics and cell densities."
+    )
+    parser.add_argument(
+        "--cells_path",
+        type=str,
+        required=True,
+        help="Path to directory containing parquet files with cell features. "
+        "Each file must be named <identifier>.parquet.",
+    )
+    parser.add_argument(
+        "--tissue_contours_path",
+        type=str,
+        required=True,
+        help="Path to directory containing tissue contour annotations as GeoJSON "
+        "files. Each file must be named <identifier>_tissue_contours.geojson.",
+    )
+    parser.add_argument(
+        "--cancer_contours_path",
+        type=str,
+        required=True,
+        help="Path to directory containing cancer region annotations as GeoJSON "
+        "files. Each file must be named <identifier>.geojson.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="slide_features.parquet",
+        help="Path for the output parquet file containing per-sample, per-region "
+        "summary statistics and cell densities. Defaults to "
+        "'slide_features.parquet'.",
+    )
     args = parser.parse_args()
 
     data_dict = {}
