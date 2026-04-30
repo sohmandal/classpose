@@ -1,3 +1,36 @@
+"""
+Extract morphological and colour features from individual cells in a Whole
+Slide Image (WSI) using polygon annotations stored in a GeoJSON file.
+
+This script implements a two-stage parallel pipeline:
+
+1. **Cell loading** (`CellLoader`): spawns ``--n_workers_reading`` worker
+   processes that read cell polygon coordinates from the GeoJSON, crop the
+   corresponding image patch from the WSI, and rasterise a binary cell mask.
+   Loaded cells are placed on an inter-process queue.
+
+2. **Feature extraction** (`FeatureExtraction`): spawns
+   ``--n_workers_feature`` worker processes that consume the loading queue and
+   compute, for each cell:
+   - *Shape features*: area, perimeter, convex hull area, minor/major axis,
+     eccentricity, orientation, solidity, form factor, and all OpenCV moments.
+   - *Colour features*: per-channel mean, standard deviation and entropy for
+     both the RGB and HED (haematoxylin–eosin–DAB) colour spaces.
+
+The extracted features are collected into a pandas DataFrame and saved as a
+parquet file with float32 precision.
+
+Usage
+-----
+    python feature_extraction.py \\
+        --wsi_path <slide.svs> \\
+        --geojson_path <cells.geojson> \\
+        --output <features.parquet> \\
+        [--n_workers_reading N] \\
+        [--n_workers_feature N] \\
+        [--geojson_scale SCALE]
+"""
+
 from __future__ import annotations
 
 import time
