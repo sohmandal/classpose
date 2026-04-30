@@ -1,3 +1,30 @@
+"""
+Calculate spatial gradients of cell morphological features relative to cancer
+boundaries.
+
+For each tissue sample this script:
+1. Loads cell detections (parquet) and cancer contour annotations (GeoJSON).
+2. Computes each cell's log-transformed distance to the nearest tissue boundary
+   and a binary cancer-region mask.
+3. Fits an OLS regression (via polars-ols) per sample and morphological feature
+   (perimeter, solidity, elongation, entropy_h) using:
+   - one-hot dummy columns for each cell type,
+   - interaction terms between the dummies and log-distance (gradient inside
+     non-cancer regions),
+   - interaction terms between the dummies, log-distance, and the cancer mask
+     (gradient inside cancer regions).
+4. Collects regression coefficients, standard errors, t-values, p-values and
+   goodness-of-fit statistics (R², MAE, MSE) across all samples.
+5. Writes the joined coefficient/statistics table to a parquet file.
+
+Usage
+-----
+    python calculate-gradients.py \\
+        --cells_path <dir_with_parquet_files> \\
+        --cancer_contours_path <dir_with_geojson_files> \\
+        --output <output.parquet>
+"""
+
 import polars as pl
 import polars_ols as pls
 from pathlib import Path
@@ -33,10 +60,32 @@ logger = get_logger(__name__)
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--cells_path", type=str, required=True)
-    parser.add_argument("--cancer_contours_path", type=str, required=True)
-    parser.add_argument("--output", type=str, required=True)
+    parser = argparse.ArgumentParser(
+        description="Calculate gradients for cell types based on distance to cancer contours."
+    )
+    parser.add_argument(
+        "--cells_path",
+        type=str,
+        required=True,
+        help="Path to directory containing parquet files with cell features. The "
+        "parquet files should have at least perimeter, solidity, elongation and "
+        "entropy_h, as well as a 'classification' columns.",
+    )
+    parser.add_argument(
+        "--cancer_contours_path",
+        type=str,
+        required=True,
+        help="Path to directory containing cancer contour annotations as GeoJSON "
+        "files. Each file must be named <identifier>.geojson to match the "
+        "corresponding <identifier>.parquet in --cells_path.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        required=True,
+        help="Path for the output parquet file containing OLS coefficients and "
+        "fit statistics (R², MAE, MSE) for every sample/feature combination.",
+    )
     args = parser.parse_args()
 
     data_dict = {}
