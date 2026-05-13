@@ -43,7 +43,11 @@ def resize_and_increment(dataset, key, new_items, n: int):
     logger.info("Appending %d items with shape %s to %s", n, item_shape, key)
     old_size = dataset[key].shape[0]
     dataset[key].resize((old_size + n, *item_shape))
-    for i, item in enumerate(new_items):
+    for i, item in tqdm(
+        enumerate(new_items),
+        total=n,
+        desc=f"Appending {n} items to {key}",
+    ):
         dataset[key][old_size + i] = item
 
 
