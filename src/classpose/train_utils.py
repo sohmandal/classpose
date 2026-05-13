@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from skimage import io
 from skimage.measure import label
-from tqdm import trange
+from tqdm import trange, tqdm
 from sklearn.model_selection import train_test_split
 from cellpose import dynamics, utils
 from cellpose.train import _reshape_norm
@@ -13,6 +13,41 @@ from classpose.dataset import ClassposeTrainingDataset, ClassposeDataset
 from classpose.utils import get_default_device
 
 logger = get_logger(__name__)
+
+
+def _filter_labels_and_images(
+    images: list[np.ndarray], labels: list[np.ndarray]
+):
+    """
+    This removes instances whenever there is a _single_ positive pixel. The reason
+    why we do this is because there is a bug with the flow computation where, if
+    the number of instance pixels is 1, there is an error. While not ideal, this
+    is a reasonable solution which gets rid of very few images.
+
+    Args:
+        images (list[np.ndarray]): List of images.
+        labels (list[np.ndarray]): List of labels.
+
+    Returns:
+        tuple[list[np.ndarray], list[np.ndarray]]: Tuple of filtered images and labels.
+    """
+    remove = []
+    for label in tqdm(
+        labels,
+        desc="Filtering out labels and images with a single annotated pixel...",
+    ):
+        instances = label[0]
+        if np.nonzero(instances)[0].size == 1:
+            remove.append(True)
+        else:
+            remove.append(False)
+    if sum(remove) > 0:
+        logger.info(
+            f"Removed {sum(remove)} images with a single pixel instance"
+        )
+    return [image for image, r in zip(images, remove) if not r], [
+        label for label, r in zip(labels, remove) if not r
+    ]
 
 
 def _split_labels(
@@ -184,6 +219,16 @@ def _process_train_test(
             logger.critical(error_message)
             raise ValueError(error_message)
 
+    if train_labels is not None:
+        train_data, train_labels = _filter_labels_and_images(
+            train_data, train_labels
+        )
+        nimg = len(train_data)
+    if test_labels is not None:
+        test_data, test_labels = _filter_labels_and_images(
+            test_data, test_labels
+        )
+        nimg_test = len(test_data)
     ### check that flows are computed
     if train_labels is not None:
         train_labels = dynamics.labels_to_flows(
