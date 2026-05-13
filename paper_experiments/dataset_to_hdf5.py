@@ -59,7 +59,7 @@ def get_class_counts(Y: list[np.ndarray], n_classes: int) -> np.ndarray:
         np.ndarray: Array of class counts.
     """
     return np.bincount(
-        np.concatenate([y.ravel() for y in Y]), minlength=n_classes
+        np.concatenate([y[y >= 0].ravel() for y in Y]), minlength=n_classes
     )
 
 
@@ -86,7 +86,7 @@ def get_instance_counts(
     counts = np.zeros((len(processed_labels), n_classes))
     for i in range(len(processed_labels)):
         ins = processed_labels[i][0]
-        cla = classes[i]
+        cla = classes[i][0]
         for j in range(n_classes):
             counts[i, j] = np.unique(ins[cla == j]).size
     return counts
