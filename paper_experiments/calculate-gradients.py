@@ -7,7 +7,7 @@ For each tissue sample this script:
 2. Computes each cell's log-transformed distance to the nearest tissue boundary
    and a binary cancer-region mask.
 3. Fits an OLS regression (via polars-ols) per sample and morphological feature
-   (perimeter, solidity, elongation, entropy_h) using:
+   (perimeter, solidity, eccentricity, entropy_h) using:
    - one-hot dummy columns for each cell type,
    - interaction terms between the dummies and log-distance (gradient inside
      non-cancer regions),
@@ -35,7 +35,7 @@ from tqdm import tqdm
 FEATURES = [
     "perimeter",
     "solidity",
-    "elongation",
+    "eccentricity",
     "entropy_h",
 ]
 CELL_TYPES = [
@@ -68,7 +68,7 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help="Path to directory containing parquet files with cell features. The "
-        "parquet files should have at least perimeter, solidity, elongation and "
+        "parquet files should have at least perimeter, solidity, eccentricity and "
         "entropy_h, as well as a 'classification' columns.",
     )
     parser.add_argument(
