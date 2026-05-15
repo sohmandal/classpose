@@ -178,8 +178,12 @@ if __name__ == "__main__":
             all_stats.append(stats)
             all_coefficients.append(coefficients)
 
+    logger.info(f"Finished processing samples")
     all_stats = pl.concat(all_stats)
     all_coefficients = pl.concat(all_coefficients)
     final_df = all_coefficients.join(all_stats, on=["identifier", "feature"])
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    logger.warning(
+        f"Writing coefficients with shape {final_df.shape} to {args.output}"
+    )
     final_df.write_parquet(args.output)
