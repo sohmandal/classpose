@@ -452,7 +452,12 @@ def get_class_weights(class_counts: np.ndarray) -> np.ndarray:
     logger.info(
         "Computing class weights using inverse frequency with square root scaling"
     )
-    inv_freq = np.median(class_counts) / class_counts
+    positive_counts = class_counts[class_counts > 0]
+    if positive_counts.size == 0:
+        raise ValueError("Cannot compute class weights with no positive class counts")
+    median_count = np.median(positive_counts)
+    inv_freq = np.zeros_like(class_counts, dtype=np.float64)
+    inv_freq[class_counts > 0] = median_count / class_counts[class_counts > 0]
     inv_freq = inv_freq**0.5
     class_weights = inv_freq.round(4)
     logger.info(f"class weights = {class_weights.tolist()}")
@@ -477,7 +482,8 @@ def compute_oversampling_probabilities(
         np.ndarray: Normalized probability array for training sample selection.
     """
     logger.info(f"Computing oversampling probabilities with power {power}")
-    class_weights = 1 / class_counts
+    class_weights = np.zeros_like(class_counts, dtype=np.float64)
+    class_weights[class_counts > 0] = 1.0 / class_counts[class_counts > 0]
     class_weights[0] = 0
     weights = np.sum(instance_counts * class_weights[None], 1)
     weights = weights**power
