@@ -444,6 +444,7 @@ def process_sample(
         .unpivot(on=summary_feature_cols, index="classification")
         .with_columns(
             pl.concat_str(
+                pl.lit("overall"),
                 pl.col("classification"),
                 pl.col("variable"),
                 separator=".",
