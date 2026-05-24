@@ -5,8 +5,8 @@ parquet files and GeoJSON region annotations.
 For each tissue sample this script:
 1. Loads cell detections (parquet) and matches them to cancer region contours
    (GeoJSON) and tissue contours (GeoJSON).
-2. Computes morphological and colour features per cell, including elongation,
-   distance to nearest lymphocyte, and the 7 Hu invariant moments.
+2. Computes morphological and colour features per cell, including distance to 
+    nearest lymphocyte, and the 7 Hu invariant moments.
 3. Groups cells by classification and region mask, then calculates per-group
    mean, standard deviation, count, and density (cells per µm²) for all
    features in FEATURES.
@@ -39,7 +39,6 @@ logger = get_logger(__name__)
 FEATURES = [
     "area",
     "perimeter",
-    "elongation",
     "eccentricity",
     "solidity",
     "formfactor",
@@ -193,8 +192,7 @@ def hu_6(nu30: pl.Expr, nu12: pl.Expr, nu21: pl.Expr, nu03: pl.Expr) -> pl.Expr:
 
 def expand_features(cells: pl.DataFrame) -> pl.DataFrame:
     """
-    Calculates additional features, particularly elongation (using the major
-    and minor axes) and the 7 invariant (Hu) moments.
+    Calculates additional features, particularly the 7 invariant (Hu) moments.
 
     Args:
         cells (pl.DataFrame): DataFrame containing cell features with columns
@@ -203,13 +201,9 @@ def expand_features(cells: pl.DataFrame) -> pl.DataFrame:
 
     Returns:
         pl.DataFrame: DataFrame with additional calculated features including
-            elongation and the 7 Hu invariant moments (hu_0 through hu_6).
+            the 7 Hu invariant moments (hu_0 through hu_6).
     """
     cells = cells.with_columns(
-        # calculates elongation
-        (pl.col("major_axis") / pl.col("minor_axis"))
-        .fill_null(0.0)
-        .alias("elongation"),
         hu_0(pl.col("nu20"), pl.col("nu02")).alias("hu_0"),
         hu_1(pl.col("nu20"), pl.col("nu02"), pl.col("nu11")).alias("hu_1"),
         hu_2(
