@@ -1365,7 +1365,7 @@ def main(args):
 
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
-        while not pp.polygons.empty():
+        for _ in range(pp.value.value):
             polygons.extend([to_geojson_polygon(x) for x in pp.polygons.get()])
             pbar.update()
     logger.info(f"Number of detected cells: {len(polygons)}")
