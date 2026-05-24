@@ -46,6 +46,7 @@ import time
 import uuid
 from pathlib import Path
 from multiprocessing.managers import SyncManager
+from multiprocessing import Event
 
 import cv2
 import numpy as np
@@ -107,6 +108,7 @@ class SlideLoader:
         min_area: int = 0,
         roi_tree: shapely.STRtree | None = None,
         device: str | None = None,
+        termination_event: Event | None = None,
     ):
         """
         Args:
@@ -126,6 +128,8 @@ class SlideLoader:
             roi_tree (shapely.STRtree, optional): STRtree of the ROI polygons.
                 Defaults to None.
             device (str, optional): Device to use for inference. Defaults to None.
+            termination_event (Event, optional): Event to signal termination.
+                Defaults to None.
         """
         self.slide_path = slide_path
         self.tile_size = tile_size
@@ -136,6 +140,7 @@ class SlideLoader:
         self.min_area = min_area
         self.roi_tree = roi_tree
         self.device = device
+        self.termination_event = termination_event
 
         self.downloaded_slide = None
 
@@ -402,6 +407,8 @@ class SlideLoader:
                 pbar.set_description(f"Tiles to predict: {n}")
         for _ in range(self.n_none):
             self.q.put((None, None))
+        if self.termination_event is not None:
+            self.termination_event.wait()
 
     def __iter__(self):
         """
@@ -420,6 +427,8 @@ class SlideLoader:
         """
         Closes the queue and joins the process.
         """
+        if self.termination_event is not None:
+            self.termination_event.set()
         self.p.join()
         if self.downloaded_slide is not None:
             logger.info(f"Removing downloaded slide {self.downloaded_slide}")
@@ -1238,6 +1247,7 @@ def filter_tile(tile: np.ndarray) -> bool:
 
 def main(args):
     tmproc.set_start_method("spawn", force=True)
+    termination_event = Event()
 
     if args.tile_size < MIN_TILE_SIZE:
         raise ValueError(
@@ -1296,6 +1306,7 @@ def main(args):
         min_area=args.min_area,
         roi_tree=roi_tree,
         device=devices[0],
+        termination_event=termination_event,
     )
     pp = PostProcessor(labels=labels, manager=manager)
     # Wait for slide to be initialized so that the target downsample is known

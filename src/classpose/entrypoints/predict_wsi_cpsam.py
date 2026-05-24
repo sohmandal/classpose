@@ -46,6 +46,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
+from multiprocessing import Event
 
 import cv2
 import numpy as np
@@ -308,6 +309,7 @@ def worker(
 
 def main(args):
     tmproc.set_start_method("spawn", force=True)
+    termination_event = Event()
 
     if args.tile_size < MIN_TILE_SIZE:
         raise ValueError(
@@ -350,6 +352,7 @@ def main(args):
         min_area=args.min_area,
         roi_tree=roi_tree,
         device=devices[0],
+        termination_event=termination_event,
     )
     pp = PostProcessor(manager=manager)
     # Wait for slide to be initialized so that the target downsample is known
