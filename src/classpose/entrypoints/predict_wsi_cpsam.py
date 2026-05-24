@@ -78,6 +78,7 @@ from classpose.entrypoints.predict_wsi import (
     load_roi_polygons,
     polygons_to_centroids,
     shapely_polygon_to_geojson,
+    to_geojson_polygon,
 )
 from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.log import get_logger
@@ -184,34 +185,15 @@ class PostProcessor:
                     continue
                 center = np.round(polygon.centroid.coords[0], 2).tolist()
                 curr_coords = curr_coords.tolist()
-                curr_coords.append(curr_coords[0])
+                curr_coords.append(curr_coords[0].copy())
                 curr_cell = {
-                    "type": "Feature",
                     "id": str(uuid.uuid4()),
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [curr_coords],
-                    },
-                    "properties": {
-                        "objectType": "annotation",
-                        "isLocked": False,
-                        "classification": {
-                            "name": class_name,
-                            "color": class_color,
-                        },
-                        "measurements": [
-                            {"name": "area", "value": polygon.area},
-                            {"name": "perimeter", "value": polygon.length},
-                            {
-                                "name": "centroidX",
-                                "value": center[0],
-                            },
-                            {
-                                "name": "centroidY",
-                                "value": center[1],
-                            },
-                        ],
-                    },
+                    "coords": curr_coords,
+                    "area": polygon.area,
+                    "label": class_name,
+                    "color": class_color,
+                    "perimeter": polygon.length,
+                    "centroid": center,
                 }
                 curr_cells.append(curr_cell)
             self.polygons.put(curr_cells)
@@ -409,7 +391,7 @@ def main(args):
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
         while not pp.polygons.empty():
-            polygons.extend(pp.polygons.get())
+            polygons.extend([to_geojson_polygon(x) for x in pp.polygons.get()])
             pbar.update()
     logger.info("Number of detected cells: %s", len(polygons))
     logger.info("Number of invalid cells: %s", pp.n_invalid_cells.value)
