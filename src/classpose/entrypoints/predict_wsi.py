@@ -47,6 +47,7 @@ import uuid
 from pathlib import Path
 from multiprocessing.managers import SyncManager
 from multiprocessing import Event
+from multiprocessing.synchronize import Event as EventType
 
 import cv2
 import numpy as np
@@ -108,7 +109,7 @@ class SlideLoader:
         min_area: int = 0,
         roi_tree: shapely.STRtree | None = None,
         device: str | None = None,
-        termination_event: Event | None = None,
+        termination_event: EventType | None = None,
     ):
         """
         Args:
