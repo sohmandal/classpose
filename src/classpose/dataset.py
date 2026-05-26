@@ -490,7 +490,7 @@ class ClassposeHDF5Dataset(ClassposeDataset):
         """
         if self._class_counts is None:
             with h5py.File(self.hdf5_path) as f:
-                if "class_counts" in f and self._is_subset is False:
+                if "class_counts" in f:
                     self._class_counts = f["class_counts"][:]
                 else:
                     self._class_counts = super().class_counts
