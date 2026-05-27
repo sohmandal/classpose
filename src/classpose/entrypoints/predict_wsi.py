@@ -90,6 +90,28 @@ MIN_TILE_SIZE = 256
 COLORMAP = [[int(y * 255) for y in x] for x in colormaps["Set3"].colors]
 
 
+def resize_tile_to_target_mpp(tile: np.ndarray, resize_factor: float) -> np.ndarray:
+    """
+    Resize a tile so that its apparent MPP matches the model MPP.
+
+    Args:
+        tile (np.ndarray): Tile read from the selected pyramid level.
+        resize_factor (float): Resize factor.
+
+    Returns:
+        np.ndarray: Resized tile.
+    """
+    if resize_factor == 1.0:
+        return tile
+    new_width = max(1, int(round(tile.shape[1] * resize_factor)))
+    new_height = max(1, int(round(tile.shape[0] * resize_factor)))
+    return cv2.resize(
+        tile,
+        (new_width, new_height),
+        interpolation=cv2.INTER_LINEAR,
+    )
+
+
 class SlideLoader:
     """
     SlideLoader is a class that loads a slide and returns tiles for inference.
@@ -486,7 +508,7 @@ class PostProcessor:
         self,
         data: list[tuple[np.ndarray, np.ndarray]],
         batch_coords: list[tuple[int, int]],
-        ts: float,
+        target_downsample: float,
     ):
         """
         Data preprocessing following the aforementioned protocol. Appends everything
@@ -496,7 +518,7 @@ class PostProcessor:
             data (list[tuple]): Data to process. Should be a list of tuples, where each
                 tuple contains the instance mask and class mask.
             batch_coords (list[tuple[int, int]]): List of coordinates for the batch.
-            ts (float): Target downsample.
+            target_downsample (float): Level-0 pixels per prediction pixel.
         """
         for datum, coords in zip(data, batch_coords):
             masks, class_masks = datum
@@ -511,7 +533,7 @@ class PostProcessor:
                         cv2.RETR_EXTERNAL,
                         cv2.CHAIN_APPROX_SIMPLE,
                     )[0][0][:, 0]
-                    * ts
+                    * target_downsample
                     + coords
                 )
                 # discard invalid polygons as these cannot be read in QuPath
@@ -555,6 +577,7 @@ def worker(
     slide_queue_size: tmproc.Value,
     n_cells: tmproc.Value,
     n_invalid_cells: tmproc.Value,
+    slide_downsample: float = 1,
     bsize: int = 256,
     target_downsample: float = 1,
     bf16: bool = False,
@@ -577,8 +600,9 @@ def worker(
         slide_queue_size (tmproc.Value): tmp Value to count total number of tiles.
         n_cells (tmproc.Value): tmp Value to count number of cells.
         n_invalid_cells (tmproc.Value): tmp Value to count number of invalid cells.
+        slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
-        target_downsample (float): Target downsample.
+        target_downsample (float): Level-0 pixels per prediction pixel.
     """
     model = ClassposeModel(
         gpu=dev.type == "cuda",
@@ -601,10 +625,12 @@ def worker(
         position=1,
         total=0,
     ) as pbar:
+        resize_factor = slide_downsample / target_downsample
         while True:
             tile, coords = slide_queue.get()
             if tile is None:
                 break
+            tile = resize_tile_to_target_mpp(tile, resize_factor)
             masks, raw_data, class_masks, styles = model.eval(
                 [tile],
                 batch_size=batch_size,
@@ -1302,6 +1328,16 @@ def main(args):
     while slide.ts.value == 0:
         time.sleep(0.1)
     ts = float(slide.ts.value)
+    mpp_x = float(slide.mpp_x.value)
+    mpp_y = float(slide.mpp_y.value)
+    target_downsample = min(
+        model_config.mpp / mpp_x,
+        model_config.mpp / mpp_y,
+    )
+    logger.info(
+        "Target downsample used for back-projection: %s",
+        target_downsample,
+    )
 
     if len(devices) > 1:
         workers = []
@@ -1323,8 +1359,9 @@ def main(args):
                     slide.n,
                     pp.n_cells,
                     pp.n_invalid_cells,
-                    256,
                     ts,
+                    256,
+                    target_downsample,
                     args.bf16,
                 ),
             )
@@ -1346,8 +1383,9 @@ def main(args):
             slide_queue_size=slide.n,
             n_cells=pp.n_cells,
             n_invalid_cells=pp.n_invalid_cells,
+            slide_downsample=ts,
             bsize=256,
-            target_downsample=ts,
+            target_downsample=target_downsample,
             bf16=args.bf16,
         )
     pp.p.join()
