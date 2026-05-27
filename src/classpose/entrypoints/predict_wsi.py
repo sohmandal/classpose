@@ -237,14 +237,19 @@ class SlideLoader:
                     self.tile_size, self.overlap, self.slide_dim, self.ts.value
                 )
             )
-        logger.info(f"Slide mpp: {self.mpp}")
+        logger.info(f"Slide MPP: {self.mpp}")
+        logger.info(f"Model MPP: {self.train_mpp}")
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
         logger.info(f"Tile size: {self.tile_size}")
         logger.info(f"Overlap: {self.overlap}")
-        logger.info(f"Target downsample: {target_downsample}")
-        logger.info(f"Slide downsample: {self.ts.value}")
-        logger.info(f"Level: {self.level}")
+        logger.info(f"Desired scale from MPP: {target_downsample}")
+        logger.info(f"Selected level: {self.level}")
+        logger.info(f"Selected level downsample: {self.ts.value}")
+        logger.info(
+            "Residual resize factor before inference: %s",
+            self.ts.value / target_downsample,
+        )
 
     def _align_roi_tree_to_slide_bounds(self):
         """
@@ -1324,7 +1329,7 @@ def main(args):
         device=devices[0],
     )
     pp = PostProcessor(labels=labels, manager=manager)
-    # Wait for slide to be initialized so that the target downsample is known
+    # Wait for slide to be initialized so that the target scale is known
     while slide.ts.value == 0:
         time.sleep(0.1)
     ts = float(slide.ts.value)
@@ -1335,7 +1340,7 @@ def main(args):
         model_config.mpp / mpp_y,
     )
     logger.info(
-        "Target downsample used for back-projection: %s",
+        "Prediction-to-slide coordinate scale: %s",
         target_downsample,
     )
 
