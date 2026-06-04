@@ -12,6 +12,12 @@ from classpose.metrics.utils import (
 
 
 class MulticlassPQCalculator:
+    """
+    Callable that computes multi-class PQ info for a single image pair.
+
+    Designed to be used with :func:`multiprocessing.Pool.imap_unordered` so
+    that per-image PQ computation can be parallelised.
+    """
 
     def __init__(
         self,
@@ -19,6 +25,16 @@ class MulticlassPQCalculator:
         match_iou: float,
         no_border_instances: bool = False,
     ):
+        """
+        Initialise the calculator.
+
+        Args:
+            nr_classes (int): Number of foreground classes.
+            match_iou (float): IoU threshold for matching instances.
+            no_border_instances (bool, optional): If ``True``, instances
+                touching the image border are removed before metric
+                computation. Defaults to False.
+        """
         self.nr_classes = nr_classes
         self.match_iou = match_iou
         self.no_border_instances = no_border_instances
@@ -26,6 +42,16 @@ class MulticlassPQCalculator:
     def __call__(
         self, gt_pred_idx: tuple[np.ndarray, np.ndarray, int]
     ) -> tuple[list, int]:
+        """
+        Compute PQ info for one ground-truth / prediction pair.
+
+        Args:
+            gt_pred_idx (tuple[np.ndarray, np.ndarray, int]): A tuple of
+                ``(gt_mask, pred_mask, image_index)``.
+
+        Returns:
+            tuple[list, int]: Per-class PQ statistics and the image index.
+        """
         gt, pred, idx = gt_pred_idx
         if self.no_border_instances:
             gt = remove_border_instances(gt)
@@ -37,6 +63,21 @@ class MulticlassPQCalculator:
 
 
 def remove_border_instances(mask: np.ndarray) -> np.ndarray:
+    """
+    Zero-out instances that touch the image border.
+
+    An instance is considered a border instance if any of its pixels lie on
+    the first or last row/column of the mask.
+
+    Args:
+        mask (np.ndarray): Instance mask of shape ``(H, W)`` or
+            ``(H, W, C)``.  When 3-dimensional, the first channel is
+            treated as the instance channel and all channels are zeroed
+            for border instances.
+
+    Returns:
+        np.ndarray: Mask with border instances set to 0.
+    """
     if len(mask.shape) == 3:
         instances = mask[..., 0]
     else:
@@ -48,7 +89,7 @@ def remove_border_instances(mask: np.ndarray) -> np.ndarray:
     )
     border_instances = border_instances[border_instances != 0]
     mask[np.isin(instances, border_instances)] = 0
-    return masks
+    return mask
 
 
 def compute_binary_pq_metrics(

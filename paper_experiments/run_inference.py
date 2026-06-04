@@ -38,6 +38,19 @@ CLASS_COLORS = {
 
 
 def apply_class_colormap(class_mask, colors_dict):
+    """
+    Apply a class-to-colour mapping to a 2-D class mask.
+
+    Args:
+        class_mask (np.ndarray): 2-D integer array of shape ``(H, W)``
+            where each pixel value is a class ID.
+        colors_dict (dict[int, list[float]]): Mapping from class ID to
+            an RGB colour triplet (values in ``[0, 1]``).
+
+    Returns:
+        np.ndarray: Float32 RGB image of shape ``(H, W, 3)``.
+    """
+
     h, w = class_mask.shape
     colored_mask = np.zeros((h, w, 3), dtype=np.float32)
     for class_id, color_val in colors_dict.items():
@@ -68,7 +81,20 @@ def load_labels(labels_path: str) -> np.ndarray:
     return labels
 
 
-def get_rescale_ratio(training_to_inference_mpp: str):
+def get_rescale_ratio(training_to_inference_mpp: str) -> float:
+    """
+    Parse a rescale specification and return the spatial ratio.
+
+    The specification can be either a single float (used directly) or two
+    colon-separated floats ``"training_mpp:inference_mpp"`` whose ratio is
+    returned.
+
+    Args:
+        training_to_inference_mpp (str): Rescale specification string.
+
+    Returns:
+        float: Spatial ratio to rescale images by.
+    """
     ratio = 1.0
     if ":" in training_to_inference_mpp:
         training_mpp, inference_mpp = training_to_inference_mpp.split(":")
@@ -225,10 +251,10 @@ def main(args):
         )
 
         if args.ignore_classes:
-            for i in args.ignore_classes:
-                for i in range(len(pred_for_pq)):
-                    gt_for_pq[i][..., 1][gt_for_pq[i][..., 1] == i] = 0
-                    pred_for_pq[i][..., 1][pred_for_pq[i][..., 1] == i] = 0
+            for cls in args.ignore_classes:
+                for j in range(len(pred_for_pq)):
+                    gt_for_pq[j][..., 1][gt_for_pq[j][..., 1] == cls] = 0
+                    pred_for_pq[j][..., 1][pred_for_pq[j][..., 1] == cls] = 0
 
         logger.info("Running metrics computation.")
         global_metrics, per_image_metrics = compute_multiclass_pq_metrics(
@@ -363,7 +389,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--no_border_instances",
-        action=argparse.BooleanOptionalAction,
+        action="store_true",
         default=False,
         help="Whether to remove border instances during metrics computation.",
     )
