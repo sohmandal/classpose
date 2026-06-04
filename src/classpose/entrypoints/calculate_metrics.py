@@ -37,6 +37,13 @@ from classpose.metrics.utils import load_masks
 
 
 def main(args):
+    """Load masks, apply optional label/class remapping, and compute PQ metrics.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments. See
+            :func:`main_with_args` for the full list of supported options.
+    """
+
     logger.info(f"Loading ground truth masks from {args.gt_path}")
     gt_masks = load_masks(args.gt_path)
 
@@ -95,6 +102,7 @@ def main(args):
             gt_masks,
             pred_masks,
             match_iou=args.match_iou,
+            no_border_instances=args.no_border_instances,
         )
 
         # Print results
@@ -117,6 +125,7 @@ def main(args):
             match_iou=args.match_iou,
             nr_classes=nr_classes,
             n_workers=args.n_workers,
+            no_border_instances=args.no_border_instances,
         )
 
         # Print results
@@ -142,6 +151,7 @@ def main(args):
 
 
 def main_with_args():
+    """Parse command-line arguments and run :func:`main`."""
     parser = argparse.ArgumentParser(
         description="Compute PQ (Panoptic Quality) metrics between ground truth and predicted masks."
     )
@@ -186,6 +196,12 @@ def main_with_args():
         default=None,
         help="Label map for mutli-class conversion. Should be a list of k=v index pairs."
         "Example: --label_map 0=0 1=1 2=2.",
+    )
+    parser.add_argument(
+        "--no_border_instances",
+        action="store_true",
+        default=False,
+        help="Whether to remove border instances for metrics computations.",
     )
     parser.add_argument(
         "--n_workers",
