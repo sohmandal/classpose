@@ -237,6 +237,7 @@ def main(args):
             match_iou=args.match_iou,
             nr_classes=n_classes - 1,
             n_workers=args.n_workers_metrics,
+            no_border_instances=args.no_border_instances,
         )
 
         if args.model_name is None:
@@ -359,6 +360,12 @@ if __name__ == "__main__":
         help="Training to inference MPP ratio."
         "If a single number, it will be used to rescale inference images before prediction."
         "If two colon-separated numbers are provided (i.e. 0.25:0.5), their ratio will be used.",
+    )
+    parser.add_argument(
+        "--no_border_instances",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether to remove border instances during metrics computation.",
     )
 
     args = parser.parse_args()

@@ -9,7 +9,8 @@ from tqdm import trange
 
 
 def remap_label(arr):
-    """Renumbers labels to be contiguous. Just a wrapper around
+    """
+    Renumbers labels to be contiguous. Just a wrapper around
     fastremap.renumber.
 
     Args:
@@ -20,6 +21,7 @@ def remap_label(arr):
         arr (ndarray): Array with continguous ordering of instances.
 
     """
+
     return fastremap.renumber(arr.astype(np.int64))[0]
 
 

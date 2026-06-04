@@ -117,6 +117,7 @@ def main(args):
             match_iou=args.match_iou,
             nr_classes=nr_classes,
             n_workers=args.n_workers,
+            no_border_instances=args.no_border_instances,
         )
 
         # Print results
@@ -186,6 +187,12 @@ def main_with_args():
         default=None,
         help="Label map for mutli-class conversion. Should be a list of k=v index pairs."
         "Example: --label_map 0=0 1=1 2=2.",
+    )
+    parser.add_argument(
+        "--no_border_instances",
+        type=bool,
+        default=False,
+        help="Whether to remove border instances for metrics computations.",
     )
     parser.add_argument(
         "--n_workers",
