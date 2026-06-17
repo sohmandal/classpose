@@ -1415,6 +1415,7 @@ def main(args):
     # Wait for slide to be initialized so that the target scale is known
     while slide.ts.value == 0:
         time.sleep(0.1)
+    ts = float(slide.ts.value)
     mpp_x = float(slide.mpp_x.value)
     mpp_y = float(slide.mpp_y.value)
     target_downsample = min(
@@ -1458,6 +1459,7 @@ def main(args):
                     slide.n,
                     pp.n_cells,
                     pp.n_invalid_cells,
+                    ts,
                     256,
                     target_downsample,
                     args.bf16,

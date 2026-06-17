@@ -48,8 +48,6 @@ import time
 from pathlib import Path
 from multiprocessing import Event
 
-import cv2
-import numpy as np
 import shapely
 import torch
 import torch.multiprocessing as tmproc
@@ -70,7 +68,6 @@ from classpose.entrypoints.predict_wsi import (
     DEFAULT_TILE_SIZE,
     DEFAULT_TRAIN_MPP,
     MIN_TILE_SIZE,
-    COLORMAP,
     PostProcessor,
     SlideLoader,
     apply_bounds_offset_to_feature,
