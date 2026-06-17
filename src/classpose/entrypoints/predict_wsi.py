@@ -839,6 +839,8 @@ def shapely_polygon_to_geojson(
             )
         return features
 
+    if isinstance(polygon, shapely.LineString):
+        return []
     exterior = [list(pt) for pt in polygon.exterior.coords]
     interiors = [[list(pt) for pt in ring.coords] for ring in polygon.interiors]
     coordinates = [exterior, *interiors]
