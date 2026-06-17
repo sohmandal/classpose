@@ -77,6 +77,7 @@ from classpose.entrypoints.predict_wsi import (
     filter_cells_by_contours,
     load_roi_polygons,
     polygons_to_centroids,
+    resize_tile_to_target_mpp,
     shapely_polygon_to_geojson,
     to_geojson_polygon,
 )
@@ -147,7 +148,7 @@ class PostProcessor:
         self,
         data: list[np.ndarray],
         batch_coords: list[tuple[int, int]],
-        ts: float,
+        target_downsample: float,
     ):
         """
         Data preprocessing following the aforementioned protocol. Appends everything
@@ -156,7 +157,7 @@ class PostProcessor:
         Args:
             data (list[np.ndarray]): Data to process. Should be a list of instance masks.
             batch_coords (list[tuple[int, int]]): List of coordinates for the batch.
-            ts (float): Target downsample.
+            target_downsample (float): Level-0 pixels per prediction pixel.
         """
         class_name = "cell"
         class_color = [0, 168, 132]
@@ -172,7 +173,7 @@ class PostProcessor:
                         cv2.RETR_EXTERNAL,
                         cv2.CHAIN_APPROX_SIMPLE,
                     )[0][0][:, 0]
-                    * ts
+                    * target_downsample
                     + coords
                 )
                 # discard invalid polygons as these cannot be read in QuPath
@@ -212,6 +213,7 @@ def worker(
     slide_queue_size: tmproc.Value,
     n_cells: tmproc.Value,
     n_invalid_cells: tmproc.Value,
+    slide_downsample: float = 1,
     bsize: int = 256,
     target_downsample: float = 1,
     bf16: bool = False,
@@ -232,6 +234,7 @@ def worker(
         slide_queue_size (tmproc.Value): tmp Value to count total number of tiles.
         n_cells (tmproc.Value): tmp Value to count number of cells.
         n_invalid_cells (tmproc.Value): tmp Value to count number of invalid cells.
+        slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
         target_downsample (float): Target downsample.
         bf16 (bool): Whether to use bfloat16.
@@ -255,10 +258,12 @@ def worker(
         position=1,
         total=0,
     ) as pbar:
+        resize_factor = slide_downsample / target_downsample
         while True:
             tile, coords = slide_queue.get()
             if tile is None:
                 break
+            tile = resize_tile_to_target_mpp(tile, resize_factor)
             masks, raw_data, styles = model.eval(
                 [tile],
                 batch_size=batch_size,
@@ -341,6 +346,9 @@ def main(args):
     while slide.ts.value == 0:
         time.sleep(0.1)
     ts = float(slide.ts.value)
+    mpp_x = float(slide.mpp_x.value)
+    mpp_y = float(slide.mpp_y.value)
+    target_downsample = min(args.train_mpp / mpp_x, args.train_mpp / mpp_y)
 
     if len(devices) > 1:
         workers = []
@@ -360,8 +368,9 @@ def main(args):
                     slide.n,
                     pp.n_cells,
                     pp.n_invalid_cells,
-                    256,
                     ts,
+                    256,
+                    target_downsample,
                     args.bf16,
                 ),
             )
@@ -381,8 +390,9 @@ def main(args):
             slide_queue_size=slide.n,
             n_cells=pp.n_cells,
             n_invalid_cells=pp.n_invalid_cells,
+            slide_downsample=ts,
             bsize=256,
-            target_downsample=ts,
+            target_downsample=target_downsample,
             bf16=args.bf16,
         )
     pp.p.join()
