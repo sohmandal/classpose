@@ -500,7 +500,6 @@ class PostProcessor:
             n_workers (int, optional): Number of inference workers that will send a None
                 sentinel when done. Defaults to 1.
         """
-        self.labels = labels
         self.n_workers = n_workers
 
         if manager is None:
@@ -512,9 +511,7 @@ class PostProcessor:
         self.n_cells = manager.Value("i", 0)
         self.n_invalid_cells = manager.Value("i", 0)
         self.q = tmproc.Queue(maxsize=MAX_QUEUE_SIZE)
-        self.p = tmproc.Process(
-            target=self.run, args=(self.n_workers, self.labels)
-        )
+        self.p = tmproc.Process(target=self.run, args=(self.n_workers,))
         self.p.start()
 
     def run(self, n_workers: int = 1):
