@@ -93,7 +93,9 @@ MIN_TILE_SIZE = 256
 COLORMAP = [[int(y * 255) for y in x] for x in colormaps["Set3"].colors]
 
 
-def resize_tile_to_target_mpp(tile: np.ndarray, resize_factor: float) -> np.ndarray:
+def resize_tile_to_target_mpp(
+    tile: np.ndarray, resize_factor: float
+) -> np.ndarray:
     """
     Resize a tile so that its apparent MPP matches the model MPP.
 
@@ -510,14 +512,11 @@ class PostProcessor:
 
     def __init__(
         self,
-        labels: list[str],
         manager: tmproc.Manager = None,
         n_workers: int = 1,
     ):
         """
         Args:
-            labels (list[str]): Ordered list of labels for the classes.
-                Background (0) should not be included.
             manager (tmproc.Manager, optional): Manager to use for shared memory.
             n_workers (int, optional): Number of inference workers that will send a None
                 sentinel when done. Defaults to 1.
