@@ -42,6 +42,7 @@ import argparse
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -149,7 +150,7 @@ class SlideLoader:
             manager = tmproc.Manager()
 
         self.n = manager.Value("i", 0)
-        self.q = manager.Queue(maxsize=MAX_QUEUE_SIZE)
+        self.q = tmproc.Queue(maxsize=MAX_QUEUE_SIZE)
         self.ts = manager.Value("f", 0)
         self.mpp_x = manager.Value("f", 0)
         self.mpp_y = manager.Value("f", 0)
@@ -157,6 +158,7 @@ class SlideLoader:
         self.bounds_y = manager.Value("f", 0)
         self.tissue_cnts = manager.list()
         self.roi_cnts = manager.list()
+        self.resize_factor = manager.Value("f", 1.0)
 
         self.p = tmproc.Process(target=self.fill_queue)
         self.p.start()
@@ -209,26 +211,36 @@ class SlideLoader:
         self.level = self.slide.get_best_level_for_downsample(target_downsample)
         self.slide_dim = self.slide.level_dimensions[self.level]
         self.ts.value = self.slide.level_downsamples[self.level]
+        self.resize_factor.value = self.ts.value / target_downsample
+        read_tile_size = max(
+            1, round(self.tile_size / self.resize_factor.value)
+        )
+        read_overlap = max(0, round(self.overlap / self.resize_factor.value))
         if self.roi_tree is not None:
             self.coords = list(
                 self._get_coords_roi(
-                    self.tile_size, self.overlap, self.slide_dim, self.ts.value
+                    read_tile_size, read_overlap, self.slide_dim, self.ts.value
                 )
             )
         else:
             self.coords = list(
                 self._get_coords(
-                    self.tile_size, self.overlap, self.slide_dim, self.ts.value
+                    read_tile_size, read_overlap, self.slide_dim, self.ts.value
                 )
             )
-        logger.info(f"Slide mpp: {self.mpp}")
+        logger.info(f"Slide MPP: {self.mpp}")
+        logger.info(f"Model MPP: {self.train_mpp}")
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
         logger.info(f"Tile size: {self.tile_size}")
         logger.info(f"Overlap: {self.overlap}")
-        logger.info(f"Target downsample: {target_downsample}")
-        logger.info(f"Slide downsample: {self.ts.value}")
-        logger.info(f"Level: {self.level}")
+        logger.info(f"Desired scale from MPP: {target_downsample}")
+        logger.info(f"Selected level: {self.level}")
+        logger.info(f"Selected level downsample: {self.ts.value}")
+        logger.info(
+            "Residual resize factor before inference: %s",
+            self.ts.value / target_downsample,
+        )
 
     def _align_roi_tree_to_slide_bounds(self):
         """
@@ -402,6 +414,7 @@ class SlideLoader:
                 if tile_array.shape[-1] == 4:
                     tile_array = tile_array[:, :, :3]
 
+                tile_array = self._resize_tile_to_target_mpp(tile_array)
                 self.q.put((tile_array, coords))
                 n += 1
                 self.n.value += 1
@@ -410,6 +423,27 @@ class SlideLoader:
             self.q.put((None, None))
         if self.termination_event is not None:
             self.termination_event.wait()
+
+    def _resize_tile_to_target_mpp(self, tile: np.ndarray) -> np.ndarray:
+        """
+        Resize a tile so that its apparent MPP matches the model MPP.
+
+        Args:
+            tile (np.ndarray): Tile read from the selected pyramid level.
+
+        Returns:
+            np.ndarray: Resized tile.
+        """
+        resize_factor = self.resize_factor.value
+        if resize_factor == 1.0:
+            return tile
+        new_width = max(1, int(round(tile.shape[1] * resize_factor)))
+        new_height = max(1, int(round(tile.shape[0] * resize_factor)))
+        return cv2.resize(
+            tile,
+            (new_width, new_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
 
     def __iter__(self):
         """
@@ -452,35 +486,49 @@ class PostProcessor:
     6. Adding the polygons to a list for later writing to a GeoJSON file.
     """
 
-    def __init__(self, labels: list[str], manager: tmproc.Manager = None):
+    def __init__(
+        self,
+        labels: list[str],
+        manager: tmproc.Manager = None,
+        n_workers: int = 1,
+    ):
         """
         Args:
             labels (list[str]): Ordered list of labels for the classes.
                 Background (0) should not be included.
             manager (tmproc.Manager, optional): Manager to use for shared memory.
+            n_workers (int, optional): Number of inference workers that will send a None
+                sentinel when done. Defaults to 1.
         """
         self.labels = labels
+        self.n_workers = n_workers
 
         if manager is None:
             manager = tmproc.Manager()
 
         self.n = manager.Value("i", 0)
-        self.polygons = manager.Queue()
+        self.polygons = tmproc.Queue()
         self.value = manager.Value("i", 0)
         self.n_cells = manager.Value("i", 0)
         self.n_invalid_cells = manager.Value("i", 0)
-        self.q = manager.Queue()
-        self.p = tmproc.Process(target=self.run)
+        self.q = tmproc.Queue(maxsize=MAX_QUEUE_SIZE)
+        self.p = tmproc.Process(
+            target=self.run, args=(self.n_workers, self.labels)
+        )
         self.p.start()
 
-    def run(self):
+    def run(self, n_workers: int = 1):
         """
         Generic run method for the process.
         """
+        sentinels_remaining = n_workers
         while True:
             item = self.q.get()
             if item is None:
-                break
+                sentinels_remaining -= 1
+                if sentinels_remaining == 0:
+                    break
+                continue
             self(*item)
 
     def put(self, data: list[tuple]):
@@ -496,7 +544,7 @@ class PostProcessor:
         self,
         data: list[tuple[np.ndarray, np.ndarray]],
         batch_coords: list[tuple[int, int]],
-        ts: float,
+        target_downsample: float,
     ):
         """
         Data preprocessing following the aforementioned protocol. Appends everything
@@ -504,9 +552,9 @@ class PostProcessor:
 
         Args:
             data (list[tuple]): Data to process. Should be a list of tuples, where each
-                tuple contains the instance mask and class mask.
+                tuple contains masks and class_masks.
             batch_coords (list[tuple[int, int]]): List of coordinates for the batch.
-            ts (float): Target downsample.
+            target_downsample (float): Level-0 pixels per prediction pixel.
         """
         for datum, coords in zip(data, batch_coords):
             masks, class_masks = datum
@@ -521,7 +569,7 @@ class PostProcessor:
                         cv2.RETR_EXTERNAL,
                         cv2.CHAIN_APPROX_SIMPLE,
                     )[0][0][:, 0]
-                    * ts
+                    * target_downsample
                     + coords
                 )
                 # discard invalid polygons as these cannot be read in QuPath
@@ -588,7 +636,7 @@ def worker(
         n_cells (tmproc.Value): tmp Value to count number of cells.
         n_invalid_cells (tmproc.Value): tmp Value to count number of invalid cells.
         bsize (int): Batch size.
-        target_downsample (float): Target downsample.
+        target_downsample (float): Level-0 pixels per prediction pixel.
     """
     model = ClassposeModel(
         gpu=dev.type == "cuda",
@@ -818,6 +866,8 @@ def shapely_polygon_to_geojson(
             )
         return features
 
+    if isinstance(polygon, shapely.LineString):
+        return []
     exterior = [list(pt) for pt in polygon.exterior.coords]
     interiors = [[list(pt) for pt in ring.coords] for ring in polygon.interiors]
     coordinates = [exterior, *interiors]
@@ -917,6 +967,11 @@ def load_roi_polygons(
     polys = []
     class_dict = {}
 
+    if isinstance(data, list):
+        data = {"features": data}
+    if "features" not in data and "geometry" in data:
+        data["features"] = [data]
+
     for feat in data.get("features", []):
         geom = feat.get("geometry")
         if not geom:
@@ -930,6 +985,11 @@ def load_roi_polygons(
             classification = props.get("classification", {})
             class_name = classification.get("name", "unknown")
 
+        if isinstance(shp, shapely.LineString):
+            coords = [(x, y) for x, y in zip(*shp.coords.xy)]
+            coords = coords + [coords[0]]
+            shp = shapely.Polygon(coords)
+            shp = shapely.make_valid(shp)
         if isinstance(shp, shapely.Polygon):
             polys.append(shp)
             if group_by_class:
@@ -1309,11 +1369,32 @@ def main(args):
         device=devices[0],
         termination_event=termination_event,
     )
-    pp = PostProcessor(labels=labels, manager=manager)
-    # Wait for slide to be initialized so that the target downsample is known
+    pp = PostProcessor(labels=labels, manager=manager, n_workers=len(devices))
+    # Wait for slide to be initialized so that the target scale is known
     while slide.ts.value == 0:
         time.sleep(0.1)
-    ts = float(slide.ts.value)
+    mpp_x = float(slide.mpp_x.value)
+    mpp_y = float(slide.mpp_y.value)
+    target_downsample = min(
+        model_config.mpp / mpp_x,
+        model_config.mpp / mpp_y,
+    )
+    logger.info(
+        "Prediction-to-slide coordinate scale: %s",
+        target_downsample,
+    )
+
+    collected_batches: list = []
+
+    def _drain_polygons():
+        while True:
+            item = pp.polygons.get()
+            if item is None:
+                break
+            collected_batches.append(item)
+
+    drain_thread = threading.Thread(target=_drain_polygons, daemon=True)
+    drain_thread.start()
 
     if len(devices) > 1:
         workers = []
@@ -1336,7 +1417,7 @@ def main(args):
                     pp.n_cells,
                     pp.n_invalid_cells,
                     256,
-                    ts,
+                    target_downsample,
                     args.bf16,
                 ),
             )
@@ -1359,22 +1440,25 @@ def main(args):
             n_cells=pp.n_cells,
             n_invalid_cells=pp.n_invalid_cells,
             bsize=256,
-            target_downsample=ts,
+            target_downsample=target_downsample,
             bf16=args.bf16,
         )
+
     pp.p.join()
+    slide.close()
+    pp.polygons.put(None)
+    drain_thread.join()
 
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
-        for _ in range(pp.value.value):
-            polygons.extend([to_geojson_polygon(x) for x in pp.polygons.get()])
+        for batch in collected_batches:
+            polygons.extend([to_geojson_polygon(x) for x in batch])
             pbar.update()
     logger.info(f"Number of detected cells: {len(polygons)}")
     logger.info(f"Number of invalid cells: {pp.n_invalid_cells.value}")
     if len(polygons) == 0:
         logger.warning("No cells detected")
         logger.info("Exiting")
-        slide.close()
         return
 
     logger.info("Creating GeoJSON file")
