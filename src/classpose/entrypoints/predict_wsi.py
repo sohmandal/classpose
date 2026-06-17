@@ -514,14 +514,19 @@ class PostProcessor:
         self,
         manager: tmproc.Manager = None,
         n_workers: int = 1,
+        labels: list[str] | None = None,
     ):
         """
         Args:
             manager (tmproc.Manager, optional): Manager to use for shared memory.
             n_workers (int, optional): Number of inference workers that will send a None
                 sentinel when done. Defaults to 1.
+            labels (list[str], optional): List of class labels. If provided, enables
+                multi-class mode where data should be (masks, class_masks) tuples.
+                If None, single-class mode is used with default "cell" label.
         """
         self.n_workers = n_workers
+        self.labels = labels
 
         if manager is None:
             manager = tmproc.Manager()
@@ -560,7 +565,7 @@ class PostProcessor:
 
     def __call__(
         self,
-        data: list[tuple[np.ndarray, np.ndarray]],
+        data: list[tuple[np.ndarray, np.ndarray] | np.ndarray],
         batch_coords: list[tuple[int, int]],
         target_downsample: float,
     ):
@@ -569,13 +574,18 @@ class PostProcessor:
         to the polygons list, which is a shared memory list.
 
         Args:
-            data (list[tuple]): Data to process. Should be a list of tuples, where each
-                tuple contains masks and class_masks.
+            data (list[tuple | np.ndarray]): Data to process. For multi-class mode,
+                should be a list of (masks, class_masks) tuples. For single-class mode,
+                should be a list of masks arrays.
             batch_coords (list[tuple[int, int]]): List of coordinates for the batch.
             target_downsample (float): Level-0 pixels per prediction pixel.
         """
         for datum, coords in zip(data, batch_coords):
-            masks, class_masks = datum
+            if self.labels is not None:
+                masks, class_masks = datum
+            else:
+                masks = datum
+                class_masks = None
             u = np.unique(masks)
             u = u[u > 0]
             curr_cells = []
@@ -601,14 +611,24 @@ class PostProcessor:
                 center = np.round(polygon.centroid.coords[0], 2).tolist()
                 curr_coords = curr_coords.tolist()
                 curr_coords.append(curr_coords[0].copy())
-                cl = class_masks[cell_mask][0]
+
+                if class_masks is not None:
+                    cl = class_masks[cell_mask][0]
+                    label = self.labels[int(cl) - 1]
+                    color = COLORMAP[int(cl) - 1]
+                    class_int = int(cl) - 1
+                else:
+                    label = "cell"
+                    color = [0, 168, 132]
+                    class_int = 0
+
                 curr_cell = {
                     "id": str(uuid.uuid4()),
                     "coords": curr_coords,
-                    "class_int": int(cl) - 1,
+                    "class_int": class_int,
                     "area": polygon.area,
-                    "label": self.labels[int(cl) - 1],
-                    "color": COLORMAP[int(cl) - 1],
+                    "label": label,
+                    "color": color,
                     "perimeter": polygon.length,
                     "centroid": center,
                 }
