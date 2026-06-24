@@ -704,7 +704,6 @@ def worker(
             tile, coords = slide_queue.get()
             if tile is None:
                 break
-            tile = resize_tile_to_target_mpp(tile, resize_factor)
             masks, raw_data, class_masks, styles = model.eval(
                 [tile],
                 batch_size=batch_size,
