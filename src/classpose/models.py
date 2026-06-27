@@ -27,6 +27,47 @@ from classpose.vit_sam import ClassTransformer
 models_logger = get_logger(__name__)
 
 
+PRECISION_DTYPES: dict[str, torch.dtype] = {
+    "fp32": torch.float32,
+    "fp16": torch.float16,
+    "bf16": torch.bfloat16,
+}
+
+
+def resolve_precision(
+    precision: str, device: torch.device | None = None
+) -> torch.dtype:
+    """
+    Resolve a precision string to a torch.dtype.
+
+    Args:
+        precision (str): One of "fp32", "fp16" or "bf16".
+        device (torch.device, optional): Target device. If a CUDA device that
+            does not support hardware-accelerated bf16 is passed, bf16 falls
+            back to fp16 (which is tensor-core accelerated on those GPUs).
+
+    Returns:
+        torch.dtype: The resolved dtype.
+    """
+    if precision not in PRECISION_DTYPES:
+        raise ValueError(
+            f"Unknown precision '{precision}'. "
+            f"Expected one of {sorted(PRECISION_DTYPES)}."
+        )
+    dtype = PRECISION_DTYPES[precision]
+    if (
+        dtype is torch.bfloat16
+        and device is not None
+        and device.type == "cuda"
+        and not torch.cuda.is_bf16_supported()
+    ):
+        models_logger.warning(
+            "bf16 is not hardware-accelerated on this GPU, falling back to fp16."
+        )
+        dtype = torch.float16
+    return dtype
+
+
 def resize_3d_masks(
     masks: np.ndarray,
     Ly_0: int,
@@ -223,7 +264,7 @@ class ClassposeModel(CellposeModel):
         nchan: int | None = None,
         nclasses: int | None = None,
         feature_transformation_structure: list[str] | None = None,
-        bf16: bool = False,
+        precision: str = "fp32",
     ):
         """
         Initialize the CellposeModel.
@@ -237,7 +278,9 @@ class ClassposeModel(CellposeModel):
             nclasses (int, optional): Number of classes for segmentation.
             feature_transformation_structure (list[str] | None, optional):
                 Feature transformation structure. Defaults to None.
-            bf16 (bool, optional): Whether to use bfloat16 for inference. Defaults to False.
+            precision (str, optional): Inference precision, one of ``"fp32"``,
+                ``"fp16"`` or ``"bf16"``. Defaults to ``"fp32"``. On GPUs without
+                hardware bf16 support, ``"bf16"`` falls back to ``"fp16"``.
         """
         if diam_mean is not None:
             models_logger.warning(
@@ -261,7 +304,8 @@ class ClassposeModel(CellposeModel):
         else:
             device_gpu = False
         self.gpu = device_gpu
-        self.bf16 = bf16
+        self.precision = precision
+        self.dtype = resolve_precision(precision, self.device)
 
         if pretrained_model is None:
             raise ValueError(
@@ -286,7 +330,8 @@ class ClassposeModel(CellposeModel):
         self.net = ClassTransformer(
             n_cell_classes=nclasses,
             feature_transformation_structure=feature_transformation_structure,
-        ).to(self.device, dtype=torch.bfloat16 if self.bf16 else torch.float32)
+            dtype=self.dtype,
+        ).to(self.device)
         self.nclasses = nclasses
 
         if os.path.exists(self.pretrained_model):

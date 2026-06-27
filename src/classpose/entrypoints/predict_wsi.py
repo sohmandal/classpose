@@ -668,7 +668,7 @@ def worker(
     slide_downsample: float = 1,
     bsize: int = 256,
     prediction_to_slide_scale: float = 1,
-    bf16: bool = False,
+    precision: str = "bf16",
 ):
     """
     Worker function for parallel prediction of tiles. Takes a number of shared
@@ -704,10 +704,9 @@ def worker(
             device=dev,
             nclasses=n_classes,
             feature_transformation_structure=fts,
+            precision=precision,
         )
         model.net.eval()
-        if bf16:
-            model.net = model.net.half()
         if dev.type == "cuda":
             model.net = torch.compile(model.net)
 
@@ -1488,7 +1487,7 @@ def main(args):
                     ts,
                     256,
                     prediction_to_slide_scale,
-                    args.bf16,
+                    args.precision,
                 ),
             )
             p.start()
@@ -1512,7 +1511,7 @@ def main(args):
             slide_downsample=ts,
             bsize=256,
             prediction_to_slide_scale=prediction_to_slide_scale,
-            bf16=args.bf16,
+            precision=args.precision,
         )
 
     pp.p.join()
@@ -1892,10 +1891,12 @@ def main_with_args():
         "Multi-GPU execution can be specified as 'cuda:0,1' or 'cuda:0,1,2,3'.",
     )
     parser.add_argument(
-        "--bf16",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Triggers bf16 inference.",
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["fp32", "fp16", "bf16"],
+        help="Inference precision. 'bf16' falls back to 'fp16' on GPUs without "
+        "hardware bf16 support.",
     )
     parser.add_argument(
         "--tile_size",

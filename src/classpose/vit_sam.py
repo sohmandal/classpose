@@ -89,6 +89,7 @@ class ClassTransformer(Transformer):
         checkpoint: str | None = None,
         n_cell_classes: int = 1,
         feature_transformation_structure: list[str] | None = None,
+        dtype: torch.dtype = torch.float32,
     ):
         """
         Initialize the ClassTransformer.
@@ -107,6 +108,8 @@ class ClassTransformer(Transformer):
                 1.
             feature_transformation_structure (list[str] | None, optional):
                 Feature transformation structure. Defaults to None.
+            dtype (torch.dtype, optional): Parameter/compute dtype for the
+                network. Defaults to "torch.float32".
         """
         super(ClassTransformer, self).__init__(
             backbone=backbone,
@@ -115,6 +118,7 @@ class ClassTransformer(Transformer):
             bsize=bsize,
             rdrop=rdrop,
             checkpoint=checkpoint,
+            dtype=dtype,
         )
         self.n_cell_classes = n_cell_classes
         self.feature_transformation_structure = feature_transformation_structure
