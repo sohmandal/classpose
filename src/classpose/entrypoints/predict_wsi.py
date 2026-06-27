@@ -972,6 +972,27 @@ def shapely_polygon_to_geojson(
     ]
 
 
+def _repair_geometry(
+    polygon: shapely.Geometry,
+) -> shapely.Geometry:
+    """
+    Repair an invalid geometry, preserving holes where possible.
+
+    Args:
+        polygon (shapely.Geometry): The geometry to repair.
+
+    Returns:
+        shapely.Geometry: A valid geometry.
+    """
+    try:
+        repaired = shapely.make_valid(polygon, method="structure")
+        if repaired.is_valid and not repaired.is_empty:
+            return repaired
+    except shapely.errors.GEOSException:
+        pass
+    return polygon.buffer(0)
+
+
 def make_valid(
     polygon: shapely.Polygon | shapely.MultiPolygon | shapely.Geometry,
 ) -> shapely.Polygon | shapely.MultiPolygon | shapely.GeometryCollection:
@@ -989,7 +1010,7 @@ def make_valid(
     if isinstance(polygon, shapely.Polygon):
         if polygon.is_valid:
             return polygon
-        return shapely.make_valid(polygon, method="structure")
+        return _repair_geometry(polygon)
 
     if isinstance(polygon, shapely.MultiPolygon):
         geoms = []
@@ -1005,7 +1026,7 @@ def make_valid(
             return geoms[0]
         return shapely.MultiPolygon(geoms)
 
-    return shapely.make_valid(polygon, method="structure")
+    return _repair_geometry(polygon)
 
 
 def load_roi_polygons(
