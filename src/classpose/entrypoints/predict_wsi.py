@@ -380,7 +380,7 @@ class SlideLoader:
                 yield ((int(i * ts), int(j * ts)), tile_size)
 
     def _point_to_square_polygon(
-        self, point: tuple[int, int], tile_size: int
+        self, point: tuple[int, int], tile_size: int | float
     ) -> shapely.Polygon:
         return shapely.Polygon(
             [
@@ -398,7 +398,8 @@ class SlideLoader:
         tile_size: int,
         cnts: list[shapely.Geometry],
     ):
-        tile = self._point_to_square_polygon(coords, tile_size)
+        tile_size_level0 = tile_size * float(self.ts.value)
+        tile = self._point_to_square_polygon(coords, tile_size_level0)
         has_roi = any([cnt.intersects(tile) for cnt in cnts])
         if not has_roi:
             return False
