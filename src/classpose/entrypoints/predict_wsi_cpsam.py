@@ -104,7 +104,7 @@ def worker(
     n_invalid_cells: tmproc.Value,
     slide_downsample: float = 1,
     bsize: int = 256,
-    target_downsample: float = 1,
+    prediction_to_slide_scale: float = 1,
     bf16: bool = False,
 ):
     """
@@ -125,7 +125,7 @@ def worker(
         n_invalid_cells (tmproc.Value): tmp Value to count number of invalid cells.
         slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
-        target_downsample (float): Target downsample.
+        prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
         bf16 (bool): Whether to use bfloat16.
     """
     if isinstance(dev, str):
@@ -166,7 +166,9 @@ def worker(
                     batch_masks = masks
                 else:
                     batch_masks = [masks]
-                postproc_queue.put((batch_masks, [coords], target_downsample))
+                postproc_queue.put(
+                    (batch_masks, [coords], prediction_to_slide_scale)
+                )
                 predicted_tiles.value += 1
 
                 pbar.n = predicted_tiles.value
@@ -246,7 +248,10 @@ def main(args):
     ts = float(slide.ts.value)
     mpp_x = float(slide.mpp_x.value)
     mpp_y = float(slide.mpp_y.value)
-    target_downsample = min(args.train_mpp / mpp_x, args.train_mpp / mpp_y)
+    prediction_to_slide_scale = min(
+        args.train_mpp / mpp_x,
+        args.train_mpp / mpp_y,
+    )
 
     collected_batches: list = []
 
@@ -280,7 +285,7 @@ def main(args):
                     pp.n_invalid_cells,
                     ts,
                     256,
-                    target_downsample,
+                    prediction_to_slide_scale,
                     args.bf16,
                 ),
             )
@@ -302,7 +307,7 @@ def main(args):
             n_invalid_cells=pp.n_invalid_cells,
             slide_downsample=ts,
             bsize=256,
-            target_downsample=target_downsample,
+            prediction_to_slide_scale=prediction_to_slide_scale,
             bf16=args.bf16,
         )
 

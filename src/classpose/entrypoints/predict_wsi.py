@@ -230,13 +230,15 @@ class SlideLoader:
         ):
             self._align_roi_tree_to_slide_bounds()
 
-        target_downsample = min(
+        prediction_to_slide_scale = min(
             self.train_mpp / self.mpp[0], self.train_mpp / self.mpp[1]
         )
-        self.level = self.slide.get_best_level_for_downsample(target_downsample)
+        self.level = self.slide.get_best_level_for_downsample(
+            prediction_to_slide_scale
+        )
         self.slide_dim = self.slide.level_dimensions[self.level]
         self.ts.value = self.slide.level_downsamples[self.level]
-        self.resize_factor.value = self.ts.value / target_downsample
+        self.resize_factor.value = self.ts.value / prediction_to_slide_scale
         read_tile_size = max(
             1, round(self.tile_size / self.resize_factor.value)
         )
@@ -259,12 +261,15 @@ class SlideLoader:
         logger.info(f"Slide dimensions: {self.slide_dim}")
         logger.info(f"Tile size: {self.tile_size}")
         logger.info(f"Overlap: {self.overlap}")
-        logger.info(f"Desired scale from MPP: {target_downsample}")
+        logger.info(
+            "Prediction-to-slide scale from MPP: %s",
+            prediction_to_slide_scale,
+        )
         logger.info(f"Selected level: {self.level}")
         logger.info(f"Selected level downsample: {self.ts.value}")
         logger.info(
             "Residual resize factor before inference: %s",
-            self.ts.value / target_downsample,
+            self.ts.value / prediction_to_slide_scale,
         )
 
     def _align_roi_tree_to_slide_bounds(self):
@@ -325,7 +330,7 @@ class SlideLoader:
             tile_size (int): Size of the tiles.
             overlap (int): Overlap between tiles.
             slide_dim (tuple[int, int]): Dimensions of the slide.
-            ts (float): Target downsample.
+            ts (float): Selected level downsample.
 
         Yields:
             tuple[int, int]: Tuple of coordinates (x, y).
@@ -367,7 +372,7 @@ class SlideLoader:
             tile_size (int): Size of the tiles.
             overlap (int): Overlap between tiles.
             slide_dim (tuple[int, int]): Dimensions of the slide.
-            ts (float): Target downsample.
+            ts (float): Selected level downsample.
 
         Yields:
             tuple[int, int]: Tuple of coordinates (x, y).
@@ -569,7 +574,7 @@ class PostProcessor:
         self,
         data: list[tuple[np.ndarray, np.ndarray] | np.ndarray],
         batch_coords: list[tuple[int, int]],
-        target_downsample: float,
+        prediction_to_slide_scale: float,
     ):
         """
         Data preprocessing following the aforementioned protocol. Appends everything
@@ -580,7 +585,7 @@ class PostProcessor:
                 should be a list of (masks, class_masks) tuples. For single-class mode,
                 should be a list of masks arrays.
             batch_coords (list[tuple[int, int]]): List of coordinates for the batch.
-            target_downsample (float): Level-0 pixels per prediction pixel.
+            prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
         """
         for datum, coords in zip(data, batch_coords):
             if self.labels is not None:
@@ -599,7 +604,7 @@ class PostProcessor:
                         cv2.RETR_EXTERNAL,
                         cv2.CHAIN_APPROX_SIMPLE,
                     )[0][0][:, 0]
-                    * target_downsample
+                    * prediction_to_slide_scale
                     + coords
                 )
                 # discard invalid polygons as these cannot be read in QuPath
@@ -655,7 +660,7 @@ def worker(
     n_invalid_cells: tmproc.Value,
     slide_downsample: float = 1,
     bsize: int = 256,
-    target_downsample: float = 1,
+    prediction_to_slide_scale: float = 1,
     bf16: bool = False,
 ):
     """
@@ -678,7 +683,7 @@ def worker(
         n_invalid_cells (tmproc.Value): tmp Value to count number of invalid cells.
         slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
-        target_downsample (float): Level-0 pixels per prediction pixel.
+        prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
     """
     if isinstance(dev, str):
         dev = torch.device(dev)
@@ -717,7 +722,11 @@ def worker(
                     compute_masks=True,
                 )
                 postproc_queue.put(
-                    (list(zip(masks, class_masks)), [coords], target_downsample)
+                    (
+                        list(zip(masks, class_masks)),
+                        [coords],
+                        prediction_to_slide_scale,
+                    )
                 )
                 predicted_tiles.value += 1
 
@@ -1428,13 +1437,13 @@ def main(args):
     ts = float(slide.ts.value)
     mpp_x = float(slide.mpp_x.value)
     mpp_y = float(slide.mpp_y.value)
-    target_downsample = min(
+    prediction_to_slide_scale = min(
         model_config.mpp / mpp_x,
         model_config.mpp / mpp_y,
     )
     logger.info(
         "Prediction-to-slide coordinate scale: %s",
-        target_downsample,
+        prediction_to_slide_scale,
     )
 
     collected_batches: list = []
@@ -1471,7 +1480,7 @@ def main(args):
                     pp.n_invalid_cells,
                     ts,
                     256,
-                    target_downsample,
+                    prediction_to_slide_scale,
                     args.bf16,
                 ),
             )
@@ -1495,7 +1504,7 @@ def main(args):
             n_invalid_cells=pp.n_invalid_cells,
             slide_downsample=ts,
             bsize=256,
-            target_downsample=target_downsample,
+            prediction_to_slide_scale=prediction_to_slide_scale,
             bf16=args.bf16,
         )
 
