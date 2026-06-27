@@ -77,7 +77,9 @@ Optional arguments:
   --device DEVICE       Device to use for inference. If None, automatically infers the device
                         and supports multi-device execution when available.
                         Multi-GPU execution can be specified as 'cuda:0,1' or 'cuda:0,1,2,3'.
-  --bf16, --no-bf16     Enables bfloat16 inference for supported devices.
+  --precision {fp32,fp16,bf16}
+                        Inference precision (default: bf16). 'bf16' falls back to
+                        'fp16' on GPUs without hardware bf16 support.
   --tile_size TILE_SIZE
                         Tile size for inference.
   --overlap OVERLAP     Tile overlap for inference.
