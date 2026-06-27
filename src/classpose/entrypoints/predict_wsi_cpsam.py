@@ -41,6 +41,7 @@ warnings.filterwarnings("ignore", message=".*ImplicitModification.*")
 warnings.filterwarnings("ignore", message=".*Transforming to str index.*")
 
 import argparse
+import gc
 import json
 import logging
 import threading
@@ -127,57 +128,67 @@ def worker(
         target_downsample (float): Target downsample.
         bf16 (bool): Whether to use bfloat16.
     """
-    model = CellposeModel(
-        gpu=dev.type == "cuda",
-        pretrained_model=model_path,
-        device=dev,
-    )
-    if bf16:
-        model.net = model.net.to(torch.bfloat16)
     if isinstance(dev, str):
         dev = torch.device(dev)
-    if dev.type == "cuda":
-        model.net = model.net.to(dev)
-        model.net = torch.compile(model.net)
+    model = None
+    tile = masks = raw_data = styles = None
 
-    with tqdm(
-        None,
-        desc="Predicted tiles (detected cells: 0)",
-        position=1,
-        total=0,
-    ) as pbar:
-        while True:
-            tile, coords = slide_queue.get()
-            if tile is None:
-                break
-            masks, raw_data, styles = model.eval(
-                [tile],
-                batch_size=batch_size,
-                augment=tta,
-                bsize=bsize,
-                compute_masks=True,
-            )
-            if isinstance(masks, list):
-                batch_masks = masks
-            else:
-                batch_masks = [masks]
-            postproc_queue.put((batch_masks, [coords], target_downsample))
-            predicted_tiles.value += 1
+    try:
+        model = CellposeModel(
+            gpu=dev.type == "cuda",
+            pretrained_model=model_path,
+            device=dev,
+        )
+        if bf16:
+            model.net = model.net.to(torch.bfloat16)
+        if dev.type == "cuda":
+            model.net = model.net.to(dev)
+            model.net = torch.compile(model.net)
 
-            pbar.n = predicted_tiles.value
-            pbar.total = slide_queue_size.value
+        with tqdm(
+            None,
+            desc="Predicted tiles (detected cells: 0)",
+            position=1,
+            total=0,
+        ) as pbar:
+            while True:
+                tile, coords = slide_queue.get()
+                if tile is None:
+                    break
+                masks, raw_data, styles = model.eval(
+                    [tile],
+                    batch_size=batch_size,
+                    augment=tta,
+                    bsize=bsize,
+                    compute_masks=True,
+                )
+                if isinstance(masks, list):
+                    batch_masks = masks
+                else:
+                    batch_masks = [masks]
+                postproc_queue.put((batch_masks, [coords], target_downsample))
+                predicted_tiles.value += 1
+
+                pbar.n = predicted_tiles.value
+                pbar.total = slide_queue_size.value
+                pbar.set_description(
+                    "Predicted tiles (detected cells: %s; invalid: %s)"
+                    % (n_cells.value, n_invalid_cells.value)
+                )
+                pbar.refresh()
+
             pbar.set_description(
                 "Predicted tiles (detected cells: %s; invalid: %s)"
                 % (n_cells.value, n_invalid_cells.value)
             )
-            pbar.refresh()
-
+            print()
+    finally:
+        tile = masks = raw_data = styles = None
+        model = None
+        gc.collect()
+        if dev.type == "cuda":
+            torch.cuda.empty_cache()
         postproc_queue.put(None)
-        pbar.set_description(
-            "Predicted tiles (detected cells: %s; invalid: %s)"
-            % (n_cells.value, n_invalid_cells.value)
-        )
-        print()
 
 
 def main(args):

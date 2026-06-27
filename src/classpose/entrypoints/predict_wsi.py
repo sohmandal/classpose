@@ -39,6 +39,7 @@ warnings.filterwarnings("ignore", message=".*Transforming to str index.*")
 
 import os
 import argparse
+import gc
 import json
 import logging
 import re
@@ -679,56 +680,65 @@ def worker(
         bsize (int): Batch size.
         target_downsample (float): Level-0 pixels per prediction pixel.
     """
-    model = ClassposeModel(
-        gpu=dev.type == "cuda",
-        pretrained_model=model_path,
-        device=dev,
-        nclasses=n_classes,
-        feature_transformation_structure=fts,
-    )
-    model.net.eval()
-    if bf16:
-        model.net = model.net.half()
     if isinstance(dev, str):
         dev = torch.device(dev)
-    if dev.type == "cuda":
-        model.net = torch.compile(model.net)
+    model = None
+    tile = masks = raw_data = class_masks = styles = None
 
-    with tqdm(
-        None,
-        desc="Predicted tiles (detected cells: 0)",
-        position=1,
-        total=0,
-    ) as pbar:
-        resize_factor = slide_downsample / target_downsample
-        while True:
-            tile, coords = slide_queue.get()
-            if tile is None:
-                break
-            masks, raw_data, class_masks, styles = model.eval(
-                [tile],
-                batch_size=batch_size,
-                augment=tta,
-                bsize=bsize,
-                compute_masks=True,
-            )
-            postproc_queue.put(
-                (list(zip(masks, class_masks)), [coords], target_downsample)
-            )
-            predicted_tiles.value += 1
+    try:
+        model = ClassposeModel(
+            gpu=dev.type == "cuda",
+            pretrained_model=model_path,
+            device=dev,
+            nclasses=n_classes,
+            feature_transformation_structure=fts,
+        )
+        model.net.eval()
+        if bf16:
+            model.net = model.net.half()
+        if dev.type == "cuda":
+            model.net = torch.compile(model.net)
 
-            pbar.n = predicted_tiles.value
-            pbar.total = slide_queue_size.value
+        with tqdm(
+            None,
+            desc="Predicted tiles (detected cells: 0)",
+            position=1,
+            total=0,
+        ) as pbar:
+            while True:
+                tile, coords = slide_queue.get()
+                if tile is None:
+                    break
+                masks, raw_data, class_masks, styles = model.eval(
+                    [tile],
+                    batch_size=batch_size,
+                    augment=tta,
+                    bsize=bsize,
+                    compute_masks=True,
+                )
+                postproc_queue.put(
+                    (list(zip(masks, class_masks)), [coords], target_downsample)
+                )
+                predicted_tiles.value += 1
+
+                pbar.n = predicted_tiles.value
+                pbar.total = slide_queue_size.value
+                pbar.set_description(
+                    f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
+                )
+                pbar.refresh()
+
             pbar.set_description(
                 f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
             )
-            pbar.refresh()
-
+            print()
+    finally:
+        tile = masks = raw_data = class_masks = styles = None
+        model = None
+        gc.collect()
+        if dev.type == "cuda":
+            torch.cuda.empty_cache()
         postproc_queue.put(None)
-        pbar.set_description(
-            f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
-        )
-        print()
 
 
 def to_geojson_polygon(curr_cell: dict) -> dict:
