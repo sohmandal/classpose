@@ -76,7 +76,6 @@ from classpose.entrypoints.predict_wsi import (
     filter_cells_by_contours,
     load_roi_polygons,
     polygons_to_centroids,
-    resize_tile_to_target_mpp,
     shapely_polygon_to_geojson,
     to_geojson_polygon,
 )
@@ -147,12 +146,10 @@ def worker(
         position=1,
         total=0,
     ) as pbar:
-        resize_factor = slide_downsample / target_downsample
         while True:
             tile, coords = slide_queue.get()
             if tile is None:
                 break
-            tile = resize_tile_to_target_mpp(tile, resize_factor)
             masks, raw_data, styles = model.eval(
                 [tile],
                 batch_size=batch_size,
