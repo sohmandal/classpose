@@ -65,6 +65,7 @@ def resolve_precision(
             "bf16 is not hardware-accelerated on this GPU, falling back to fp16."
         )
         dtype = torch.float16
+    models_logger.info("Using inference precision: %s (%s)", precision, dtype)
     return dtype
 
 
