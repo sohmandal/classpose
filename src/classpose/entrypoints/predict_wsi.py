@@ -57,6 +57,7 @@ import shapely
 import torch
 import torch.multiprocessing as tmproc
 from matplotlib import colormaps
+from scipy import ndimage
 from scipy.spatial import KDTree
 from skimage import color, measure
 from tqdm import tqdm
@@ -593,20 +594,26 @@ class PostProcessor:
             else:
                 masks = datum
                 class_masks = None
-            u = np.unique(masks)
-            u = u[u > 0]
+            object_slices = ndimage.find_objects(masks)
             curr_cells = []
-            for i in u:
-                cell_mask = masks == i
-                curr_coords = (
-                    cv2.findContours(
-                        np.uint8(cell_mask),
-                        cv2.RETR_EXTERNAL,
-                        cv2.CHAIN_APPROX_SIMPLE,
-                    )[0][0][:, 0]
-                    * prediction_to_slide_scale
-                    + coords
+            for label_idx, object_slice in enumerate(object_slices, start=1):
+                if object_slice is None:
+                    continue
+                y_slice, x_slice = object_slice
+                cell_mask = masks[y_slice, x_slice] == label_idx
+                contours = cv2.findContours(
+                    np.uint8(cell_mask),
+                    cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_SIMPLE,
+                )[0]
+                if len(contours) == 0:
+                    self.n_invalid_cells.value += 1
+                    continue
+                # Contour only the object bbox, then shift back to tile coordinates.
+                curr_coords = contours[0][:, 0] + np.array(
+                    [x_slice.start, y_slice.start]
                 )
+                curr_coords = curr_coords * prediction_to_slide_scale + coords
                 # discard invalid polygons as these cannot be read in QuPath
                 if curr_coords.shape[0] < 4:
                     self.n_invalid_cells.value += 1
@@ -620,7 +627,7 @@ class PostProcessor:
                 curr_coords.append(curr_coords[0].copy())
 
                 if class_masks is not None:
-                    cl = class_masks[cell_mask][0]
+                    cl = class_masks[y_slice, x_slice][cell_mask][0]
                     label = self.labels[int(cl) - 1]
                     color = COLORMAP[int(cl) - 1]
                     class_int = int(cl) - 1
