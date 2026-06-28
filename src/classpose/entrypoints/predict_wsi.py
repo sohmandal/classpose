@@ -94,6 +94,7 @@ DEFAULT_OVERLAP = 64
 MAX_QUEUE_SIZE = 2048
 MIN_TILE_SIZE = 256
 DEFAULT_INFERENCE_THREADS = 2
+DEFAULT_PROCS_PER_GPU = 1
 COLORMAP = [[int(y * 255) for y in x] for x in colormaps["Set3"].colors]
 
 
@@ -1471,6 +1472,7 @@ def main(args):
     predicted_tiles_value = manager.Value("i", 0)
 
     devices = get_device(args.device)
+    worker_devices = [d for d in devices for _ in range(max(1, DEFAULT_PROCS_PER_GPU))]
 
     logger.info(f"Starting inference with model: {model_config.path}")
     fts, n_classes = infer_structure(model_config.path)
@@ -1491,14 +1493,14 @@ def main(args):
         overlap=args.overlap,
         train_mpp=model_config.mpp,
         manager=manager,
-        n_none=len(devices),
+        n_none=len(worker_devices),
         tissue_detection_model_path=args.tissue_detection_model_path,
         min_area=args.min_area,
         roi_tree=roi_tree,
         device=devices[0],
         termination_event=termination_event,
     )
-    pp = PostProcessor(labels=labels, manager=manager, n_workers=len(devices))
+    pp = PostProcessor(labels=labels, manager=manager, n_workers=len(worker_devices))
     # Wait for slide to be initialized so that the target scale is known
     while slide.ts.value == 0:
         time.sleep(0.1)
@@ -1526,10 +1528,10 @@ def main(args):
     drain_thread = threading.Thread(target=_drain_polygons, daemon=True)
     drain_thread.start()
 
-    if len(devices) > 1:
+    if len(worker_devices) > 1:
         workers = []
-        logger.info(f"Starting workers on devices: {devices}")
-        for device in devices:
+        logger.info(f"Starting workers on devices: {worker_devices}")
+        for device in worker_devices:
             logger.info(f"Starting worker on device: {device}")
             p = tmproc.Process(
                 target=worker,
