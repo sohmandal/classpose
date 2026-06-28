@@ -44,6 +44,7 @@ import argparse
 import gc
 import json
 import logging
+import queue
 import threading
 import time
 from pathlib import Path
@@ -65,7 +66,9 @@ from classpose.entrypoints.outputs import (
     map_cells_to_roi_classes,
 )
 from classpose.entrypoints.predict_wsi import (
+    DEFAULT_INFERENCE_THREADS,
     DEFAULT_OVERLAP,
+    DEFAULT_PROCS_PER_GPU,
     DEFAULT_TILE_SIZE,
     DEFAULT_TRAIN_MPP,
     MIN_TILE_SIZE,
@@ -107,6 +110,7 @@ def worker(
     bsize: int = 256,
     prediction_to_slide_scale: float = 1,
     precision: str = "bf16",
+    inference_threads: int = DEFAULT_INFERENCE_THREADS,
 ):
     """
     Worker function for parallel prediction of tiles. Takes a number of shared
@@ -128,6 +132,8 @@ def worker(
         bsize (int): Batch size.
         prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
         precision (str): Inference precision ('fp32', 'fp16' or 'bf16').
+        inference_threads (int): Number of threads overlapping the gpu forward
+            pass with cpu pre/post-processing.
     """
     if isinstance(dev, str):
         dev = torch.device(dev)
@@ -147,16 +153,28 @@ def worker(
             model.net = model.net.to(dev)
             model.net = torch.compile(model.net)
 
+        n_threads = max(1, inference_threads)
+        local_q: queue.Queue = queue.Queue(maxsize=n_threads * 2)
+        update_lock = threading.Lock()
+
+        def _feeder():
+            """Move tiles from the shared queue into the local queue."""
+            while True:
+                tile, coords = slide_queue.get()
+                if tile is None:
+                    break
+                local_q.put((tile, coords))
+            for _ in range(n_threads):
+                local_q.put(None)
+
         with tqdm(
             None,
             desc="Predicted tiles (detected cells: 0)",
             position=1,
             total=0,
         ) as pbar:
-            while True:
-                tile, coords = slide_queue.get()
-                if tile is None:
-                    break
+
+            def _process(tile, coords):
                 masks, raw_data, styles = model.eval(
                     [tile],
                     batch_size=batch_size,
@@ -171,15 +189,42 @@ def worker(
                 postproc_queue.put(
                     (batch_masks, [coords], prediction_to_slide_scale)
                 )
-                predicted_tiles.value += 1
+                with update_lock:
+                    predicted_tiles.value += 1
+                    pbar.n = predicted_tiles.value
+                    pbar.total = slide_queue_size.value
+                    pbar.set_description(
+                        "Predicted tiles (detected cells: %s; invalid: %s)"
+                        % (n_cells.value, n_invalid_cells.value)
+                    )
+                    pbar.refresh()
 
-                pbar.n = predicted_tiles.value
-                pbar.total = slide_queue_size.value
-                pbar.set_description(
-                    "Predicted tiles (detected cells: %s; invalid: %s)"
-                    % (n_cells.value, n_invalid_cells.value)
-                )
-                pbar.refresh()
+            def _run_inference():
+                while True:
+                    item = local_q.get()
+                    if item is None:
+                        break
+                    _process(*item)
+
+            feeder = threading.Thread(target=_feeder, daemon=True)
+            feeder.start()
+
+            # Compile on the first tile single-threaded to avoid concurrent first-compilation.
+            first = local_q.get()
+            if first is None:
+                local_q.put(None)
+            else:
+                _process(*first)
+
+            inference_threads = [
+                threading.Thread(target=_run_inference, daemon=True)
+                for _ in range(n_threads)
+            ]
+            for t in inference_threads:
+                t.start()
+            for t in inference_threads:
+                t.join()
+            feeder.join()
 
             pbar.set_description(
                 "Predicted tiles (detected cells: %s; invalid: %s)"
@@ -225,6 +270,9 @@ def main(args):
     predicted_tiles_value = manager.Value("i", 0)
 
     devices = get_device(args.device)
+    worker_devices = [
+        d for d in devices for _ in range(max(1, args.procs_per_gpu))
+    ]
 
     logger.info(
         "Starting inference with CellposeSAM model: %s", args.model_path
@@ -235,14 +283,14 @@ def main(args):
         overlap=args.overlap,
         train_mpp=args.train_mpp,
         manager=manager,
-        n_none=len(devices),
+        n_none=len(worker_devices),
         tissue_detection_model_path=args.tissue_detection_model_path,
         min_area=args.min_area,
         roi_tree=roi_tree,
         device=devices[0],
         termination_event=termination_event,
     )
-    pp = PostProcessor(manager=manager, n_workers=len(devices))
+    pp = PostProcessor(manager=manager, n_workers=len(worker_devices))
 
     # Wait for slide to be initialized so that the target downsample is known
     while slide.ts.value == 0:
@@ -267,10 +315,10 @@ def main(args):
     drain_thread = threading.Thread(target=_drain_polygons, daemon=True)
     drain_thread.start()
 
-    if len(devices) > 1:
+    if len(worker_devices) > 1:
         workers = []
-        logger.info("Starting workers on devices: %s", devices)
-        for device in devices:
+        logger.info("Starting workers on devices: %s", worker_devices)
+        for device in worker_devices:
             logger.info("Starting worker on device: %s", device)
             p = tmproc.Process(
                 target=worker,
@@ -289,6 +337,7 @@ def main(args):
                     256,
                     prediction_to_slide_scale,
                     args.precision,
+                    args.inference_threads,
                 ),
             )
             p.start()
@@ -311,6 +360,7 @@ def main(args):
             bsize=256,
             prediction_to_slide_scale=prediction_to_slide_scale,
             precision=args.precision,
+            inference_threads=args.inference_threads,
         )
 
     pp.p.join()
@@ -743,6 +793,21 @@ def main_with_args():
         "'csv' generates cellular density statistics (cells/mm²) per class. "
         "'spatialdata' generates a unified SpatialData Zarr store containing all outputs. "
         "Can specify multiple types separated by spaces (e.g., --output_type csv spatialdata).",
+    )
+    parser.add_argument(
+        "--procs-per-gpu",
+        type=int,
+        default=DEFAULT_PROCS_PER_GPU,
+        help="Number of worker processes per gpu. Values >1 raise gpu utilisation "
+        "by post-processing tiles in parallel, but replicate the model in vram per "
+        "process. Increase only with spare memory.",
+    )
+    parser.add_argument(
+        "--inference-threads",
+        type=int,
+        default=DEFAULT_INFERENCE_THREADS,
+        help="Number of inference threads per worker process. Values >1 overlap the "
+        "gpu forward pass with cpu pre/post-processing. No extra VRAM cost.",
     )
     args = parser.parse_args()
 
