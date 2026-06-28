@@ -767,7 +767,7 @@ def worker(
             feeder = threading.Thread(target=_feeder, daemon=True)
             feeder.start()
 
-            # Compile single-threaded on the first tile to avoid first-compilation.
+            # Compile on the first tile single-threaded to avoid concurrent first-compilation.
             first = local_q.get()
             if first is None:
                 local_q.put(None)
