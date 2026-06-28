@@ -672,6 +672,7 @@ def worker(
     bsize: int = 256,
     prediction_to_slide_scale: float = 1,
     precision: str = "bf16",
+    inference_threads: int = DEFAULT_INFERENCE_THREADS,
 ):
     """
     Worker function for parallel prediction of tiles. Takes a number of shared
@@ -713,7 +714,7 @@ def worker(
         if dev.type == "cuda":
             model.net = torch.compile(model.net)
 
-        n_threads = max(1, DEFAULT_INFERENCE_THREADS)
+        n_threads = max(1, inference_threads)
         local_q: queue.Queue = queue.Queue(maxsize=n_threads * 2)
         update_lock = threading.Lock()
 
@@ -1472,7 +1473,7 @@ def main(args):
     predicted_tiles_value = manager.Value("i", 0)
 
     devices = get_device(args.device)
-    worker_devices = [d for d in devices for _ in range(max(1, DEFAULT_PROCS_PER_GPU))]
+    worker_devices = [d for d in devices for _ in range(max(1, args.procs_per_gpu))]
 
     logger.info(f"Starting inference with model: {model_config.path}")
     fts, n_classes = infer_structure(model_config.path)
@@ -1552,6 +1553,7 @@ def main(args):
                     256,
                     prediction_to_slide_scale,
                     args.precision,
+                    args.inference_threads,
                 ),
             )
             p.start()
@@ -1576,6 +1578,7 @@ def main(args):
             bsize=256,
             prediction_to_slide_scale=prediction_to_slide_scale,
             precision=args.precision,
+            inference_threads=args.inference_threads,
         )
 
     pp.p.join()
@@ -1994,6 +1997,21 @@ def main_with_args():
         "'csv' generates cellular density statistics (cells/mm²) per class. "
         "'spatialdata' generates a unified SpatialData Zarr store containing all outputs. "
         "Can specify multiple types separated by spaces (e.g., --output_type csv spatialdata).",
+    )
+    parser.add_argument(
+        "--procs-per-gpu",
+        type=int,
+        default=DEFAULT_PROCS_PER_GPU,
+        help="Number of worker processes per gpu. Values >1 raise gpu utilisation "
+        "by post-processing tiles in parallel, but replicate the model in vram per "
+        "process. Increase only with spare memory.",
+    )
+    parser.add_argument(
+        "--inference-threads",
+        type=int,
+        default=DEFAULT_INFERENCE_THREADS,
+        help="Number of inference threads per worker process. Values >1 overlap the "
+        "gpu forward pass with cpu pre/post-processing. No extra VRAM cost.",
     )
     args = parser.parse_args()
 
