@@ -93,7 +93,7 @@ DEFAULT_TILE_SIZE = 1024
 DEFAULT_OVERLAP = 64
 MAX_QUEUE_SIZE = 2048
 MIN_TILE_SIZE = 256
-DEFAULT_INFER_THREADS = 2
+DEFAULT_INFERENCE_THREADS = 2
 COLORMAP = [[int(y * 255) for y in x] for x in colormaps["Set3"].colors]
 
 
@@ -712,7 +712,7 @@ def worker(
         if dev.type == "cuda":
             model.net = torch.compile(model.net)
 
-        n_threads = max(1, DEFAULT_INFER_THREADS)
+        n_threads = max(1, DEFAULT_INFERENCE_THREADS)
         local_q: queue.Queue = queue.Queue(maxsize=n_threads * 2)
         update_lock = threading.Lock()
 
@@ -757,7 +757,7 @@ def worker(
                     )
                     pbar.refresh()
 
-            def _infer():
+            def _run_inference():
                 while True:
                     item = local_q.get()
                     if item is None:
@@ -774,13 +774,13 @@ def worker(
             else:
                 _process(*first)
 
-            infer_threads = [
-                threading.Thread(target=_infer, daemon=True)
+            inference_threads = [
+                threading.Thread(target=_run_inference, daemon=True)
                 for _ in range(n_threads)
             ]
-            for t in infer_threads:
+            for t in inference_threads:
                 t.start()
-            for t in infer_threads:
+            for t in inference_threads:
                 t.join()
             feeder.join()
 
