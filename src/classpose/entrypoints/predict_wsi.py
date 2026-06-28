@@ -42,6 +42,7 @@ import argparse
 import gc
 import json
 import logging
+import queue
 import re
 import threading
 import time
@@ -92,6 +93,7 @@ DEFAULT_TILE_SIZE = 1024
 DEFAULT_OVERLAP = 64
 MAX_QUEUE_SIZE = 2048
 MIN_TILE_SIZE = 256
+DEFAULT_INFER_THREADS = 2
 COLORMAP = [[int(y * 255) for y in x] for x in colormaps["Set3"].colors]
 
 
@@ -710,16 +712,28 @@ def worker(
         if dev.type == "cuda":
             model.net = torch.compile(model.net)
 
+        n_threads = max(1, DEFAULT_INFER_THREADS)
+        local_q: queue.Queue = queue.Queue(maxsize=n_threads * 2)
+        update_lock = threading.Lock()
+
+        def _feeder():
+            """Move tiles from the shared queue into the local queue."""
+            while True:
+                tile, coords = slide_queue.get()
+                if tile is None:
+                    break
+                local_q.put((tile, coords))
+            for _ in range(n_threads):
+                local_q.put(None)
+
         with tqdm(
             None,
             desc="Predicted tiles (detected cells: 0)",
             position=1,
             total=0,
         ) as pbar:
-            while True:
-                tile, coords = slide_queue.get()
-                if tile is None:
-                    break
+
+            def _process(tile, coords):
                 masks, raw_data, class_masks, styles = model.eval(
                     [tile],
                     batch_size=batch_size,
@@ -734,14 +748,41 @@ def worker(
                         prediction_to_slide_scale,
                     )
                 )
-                predicted_tiles.value += 1
+                with update_lock:
+                    predicted_tiles.value += 1
+                    pbar.n = predicted_tiles.value
+                    pbar.total = slide_queue_size.value
+                    pbar.set_description(
+                        f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
+                    )
+                    pbar.refresh()
 
-                pbar.n = predicted_tiles.value
-                pbar.total = slide_queue_size.value
-                pbar.set_description(
-                    f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
-                )
-                pbar.refresh()
+            def _infer():
+                while True:
+                    item = local_q.get()
+                    if item is None:
+                        break
+                    _process(*item)
+
+            feeder = threading.Thread(target=_feeder, daemon=True)
+            feeder.start()
+
+            # Compile single-threaded on the first tile to avoid first-compilation.
+            first = local_q.get()
+            if first is None:
+                local_q.put(None)
+            else:
+                _process(*first)
+
+            infer_threads = [
+                threading.Thread(target=_infer, daemon=True)
+                for _ in range(n_threads)
+            ]
+            for t in infer_threads:
+                t.start()
+            for t in infer_threads:
+                t.join()
+            feeder.join()
 
             pbar.set_description(
                 f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
