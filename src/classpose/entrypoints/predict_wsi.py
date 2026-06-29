@@ -2009,7 +2009,7 @@ def main_with_args():
         "Can specify multiple types separated by spaces (e.g., --output_type csv spatialdata).",
     )
     parser.add_argument(
-        "--inference-threads",
+        "--inference_threads",
         type=int,
         default=None,
         help="Number of inference threads per worker process. Values >1 overlap the "
