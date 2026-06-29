@@ -41,14 +41,14 @@ warnings.filterwarnings("ignore", message=".*ImplicitModification.*")
 warnings.filterwarnings("ignore", message=".*Transforming to str index.*")
 
 import argparse
+import gc
 import json
 import logging
+import threading
 import time
-import uuid
 from pathlib import Path
+from multiprocessing import Event
 
-import cv2
-import numpy as np
 import shapely
 import torch
 import torch.multiprocessing as tmproc
@@ -69,6 +69,7 @@ from classpose.entrypoints.predict_wsi import (
     DEFAULT_TILE_SIZE,
     DEFAULT_TRAIN_MPP,
     MIN_TILE_SIZE,
+    PostProcessor,
     SlideLoader,
     apply_bounds_offset_to_feature,
     deduplicate,
@@ -76,8 +77,8 @@ from classpose.entrypoints.predict_wsi import (
     filter_cells_by_contours,
     load_roi_polygons,
     polygons_to_centroids,
-    resize_tile_to_target_mpp,
     shapely_polygon_to_geojson,
+    to_geojson_polygon,
 )
 from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.log import get_logger
@@ -88,135 +89,6 @@ from classpose.utils import (
 from classpose import WSIReader
 
 logger = get_logger("classpose")
-
-
-class PostProcessor:
-    """
-    Post processor class for parallel post processing of tiles.
-
-    The workflow consists in:
-
-    1. Using the instance prediction to identify all cells in the tile
-    2. Using the cell coordinates to create a polygon for each cell
-    3. Filtering out invalid polygons as these represent unlikely predictions
-    (i.e. the contour crosses itself at a given point)
-    4. Extraction of some minimal features (area, perimeter, centroid) which
-    can be used for deduplicating cells at a later stage
-    5. Adding the polygons to a list for later writing to a GeoJSON file.
-    """
-
-    def __init__(self, manager: tmproc.Manager = None):
-        """
-        Args:
-            manager (tmproc.Manager, optional): Manager to use for shared memory.
-        """
-
-        if manager is None:
-            manager = tmproc.Manager()
-
-        self.n = manager.Value("i", 0)
-        self.polygons = manager.Queue()
-        self.value = manager.Value("i", 0)
-        self.n_cells = manager.Value("i", 0)
-        self.n_invalid_cells = manager.Value("i", 0)
-        self.q = manager.Queue()
-        self.p = tmproc.Process(target=self.run)
-        self.p.start()
-
-    def run(self):
-        """
-        Generic run method for the process.
-        """
-        while True:
-            item = self.q.get()
-            if item is None:
-                break
-            self(*item)
-
-    def put(self, data: list[tuple]):
-        """
-        Puts data in the queue.
-
-        Args:
-            data (list[tuple]): Data to put in the queue.
-        """
-        self.q.put(data)
-
-    def __call__(
-        self,
-        data: list[np.ndarray],
-        batch_coords: list[tuple[int, int]],
-        target_downsample: float,
-    ):
-        """
-        Data preprocessing following the aforementioned protocol. Appends everything
-        to the polygons list, which is a shared memory list.
-
-        Args:
-            data (list[np.ndarray]): Data to process. Should be a list of instance masks.
-            batch_coords (list[tuple[int, int]]): List of coordinates for the batch.
-            target_downsample (float): Level-0 pixels per prediction pixel.
-        """
-        class_name = "cell"
-        class_color = [0, 168, 132]
-        for masks, coords in zip(data, batch_coords):
-            u = np.unique(masks)
-            u = u[u > 0]
-            curr_cells = []
-            for i in u:
-                cell_mask = masks == i
-                curr_coords = (
-                    cv2.findContours(
-                        np.uint8(cell_mask),
-                        cv2.RETR_EXTERNAL,
-                        cv2.CHAIN_APPROX_SIMPLE,
-                    )[0][0][:, 0]
-                    * target_downsample
-                    + coords
-                )
-                # discard invalid polygons as these cannot be read in QuPath
-                if curr_coords.shape[0] < 4:
-                    self.n_invalid_cells.value += 1
-                    continue
-                polygon = shapely.Polygon(curr_coords)
-                if not polygon.is_valid:
-                    self.n_invalid_cells.value += 1
-                    continue
-                center = np.round(polygon.centroid.coords[0], 2).tolist()
-                curr_coords = curr_coords.tolist()
-                curr_coords.append(curr_coords[0])
-                curr_cell = {
-                    "type": "Feature",
-                    "id": str(uuid.uuid4()),
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [curr_coords],
-                    },
-                    "properties": {
-                        "objectType": "annotation",
-                        "isLocked": False,
-                        "classification": {
-                            "name": class_name,
-                            "color": class_color,
-                        },
-                        "measurements": [
-                            {"name": "area", "value": polygon.area},
-                            {"name": "perimeter", "value": polygon.length},
-                            {
-                                "name": "centroidX",
-                                "value": center[0],
-                            },
-                            {
-                                "name": "centroidY",
-                                "value": center[1],
-                            },
-                        ],
-                    },
-                }
-                curr_cells.append(curr_cell)
-            self.polygons.put(curr_cells)
-            self.n_cells.value += len(curr_cells)
-            self.value.value += 1
 
 
 def worker(
@@ -232,7 +104,7 @@ def worker(
     n_invalid_cells: tmproc.Value,
     slide_downsample: float = 1,
     bsize: int = 256,
-    target_downsample: float = 1,
+    prediction_to_slide_scale: float = 1,
     bf16: bool = False,
 ):
     """
@@ -253,66 +125,77 @@ def worker(
         n_invalid_cells (tmproc.Value): tmp Value to count number of invalid cells.
         slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
-        target_downsample (float): Target downsample.
+        prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
         bf16 (bool): Whether to use bfloat16.
     """
-    model = CellposeModel(
-        gpu=dev.type == "cuda",
-        pretrained_model=model_path,
-        device=dev,
-    )
-    if bf16:
-        model.net = model.net.to(torch.bfloat16)
     if isinstance(dev, str):
         dev = torch.device(dev)
-    if dev.type == "cuda":
-        model.net = model.net.to(dev)
-        model.net = torch.compile(model.net)
+    model = None
+    tile = masks = raw_data = styles = None
 
-    with tqdm(
-        None,
-        desc="Predicted tiles (detected cells: 0)",
-        position=1,
-        total=0,
-    ) as pbar:
-        resize_factor = slide_downsample / target_downsample
-        while True:
-            tile, coords = slide_queue.get()
-            if tile is None:
-                break
-            tile = resize_tile_to_target_mpp(tile, resize_factor)
-            masks, raw_data, styles = model.eval(
-                [tile],
-                batch_size=batch_size,
-                augment=tta,
-                bsize=bsize,
-                compute_masks=True,
-            )
-            if isinstance(masks, list):
-                batch_masks = masks
-            else:
-                batch_masks = [masks]
-            postproc_queue.put((batch_masks, [coords], target_downsample))
-            predicted_tiles.value += 1
+    try:
+        model = CellposeModel(
+            gpu=dev.type == "cuda",
+            pretrained_model=model_path,
+            device=dev,
+        )
+        if bf16:
+            model.net = model.net.to(torch.bfloat16)
+        if dev.type == "cuda":
+            model.net = model.net.to(dev)
+            model.net = torch.compile(model.net)
 
-            pbar.n = predicted_tiles.value
-            pbar.total = slide_queue_size.value
+        with tqdm(
+            None,
+            desc="Predicted tiles (detected cells: 0)",
+            position=1,
+            total=0,
+        ) as pbar:
+            while True:
+                tile, coords = slide_queue.get()
+                if tile is None:
+                    break
+                masks, raw_data, styles = model.eval(
+                    [tile],
+                    batch_size=batch_size,
+                    augment=tta,
+                    bsize=bsize,
+                    compute_masks=True,
+                )
+                if isinstance(masks, list):
+                    batch_masks = masks
+                else:
+                    batch_masks = [masks]
+                postproc_queue.put(
+                    (batch_masks, [coords], prediction_to_slide_scale)
+                )
+                predicted_tiles.value += 1
+
+                pbar.n = predicted_tiles.value
+                pbar.total = slide_queue_size.value
+                pbar.set_description(
+                    "Predicted tiles (detected cells: %s; invalid: %s)"
+                    % (n_cells.value, n_invalid_cells.value)
+                )
+                pbar.refresh()
+
             pbar.set_description(
                 "Predicted tiles (detected cells: %s; invalid: %s)"
                 % (n_cells.value, n_invalid_cells.value)
             )
-            pbar.refresh()
-
+            print()
+    finally:
+        tile = masks = raw_data = styles = None
+        model = None
+        gc.collect()
+        if dev.type == "cuda":
+            torch.cuda.empty_cache()
         postproc_queue.put(None)
-        pbar.set_description(
-            "Predicted tiles (detected cells: %s; invalid: %s)"
-            % (n_cells.value, n_invalid_cells.value)
-        )
-        print()
 
 
 def main(args):
     tmproc.set_start_method("spawn", force=True)
+    termination_event = Event()
 
     if args.tile_size < MIN_TILE_SIZE:
         raise ValueError(
@@ -355,15 +238,32 @@ def main(args):
         min_area=args.min_area,
         roi_tree=roi_tree,
         device=devices[0],
+        termination_event=termination_event,
     )
-    pp = PostProcessor(manager=manager)
+    pp = PostProcessor(manager=manager, n_workers=len(devices))
+
     # Wait for slide to be initialized so that the target downsample is known
     while slide.ts.value == 0:
         time.sleep(0.1)
     ts = float(slide.ts.value)
     mpp_x = float(slide.mpp_x.value)
     mpp_y = float(slide.mpp_y.value)
-    target_downsample = min(args.train_mpp / mpp_x, args.train_mpp / mpp_y)
+    prediction_to_slide_scale = min(
+        args.train_mpp / mpp_x,
+        args.train_mpp / mpp_y,
+    )
+
+    collected_batches: list = []
+
+    def _drain_polygons():
+        while True:
+            item = pp.polygons.get()
+            if item is None:
+                break
+            collected_batches.append(item)
+
+    drain_thread = threading.Thread(target=_drain_polygons, daemon=True)
+    drain_thread.start()
 
     if len(devices) > 1:
         workers = []
@@ -385,7 +285,7 @@ def main(args):
                     pp.n_invalid_cells,
                     ts,
                     256,
-                    target_downsample,
+                    prediction_to_slide_scale,
                     args.bf16,
                 ),
             )
@@ -407,16 +307,19 @@ def main(args):
             n_invalid_cells=pp.n_invalid_cells,
             slide_downsample=ts,
             bsize=256,
-            target_downsample=target_downsample,
+            prediction_to_slide_scale=prediction_to_slide_scale,
             bf16=args.bf16,
         )
+
     pp.p.join()
     slide.close()
+    pp.polygons.put(None)
+    drain_thread.join()
 
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
-        while not pp.polygons.empty():
-            polygons.extend(pp.polygons.get())
+        for batch in collected_batches:
+            polygons.extend([to_geojson_polygon(x) for x in batch])
             pbar.update()
     logger.info("Number of detected cells: %s", len(polygons))
     logger.info("Number of invalid cells: %s", pp.n_invalid_cells.value)

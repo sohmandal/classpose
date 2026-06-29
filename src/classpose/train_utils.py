@@ -32,11 +32,11 @@ def _filter_labels_and_images(
         tuple[list[np.ndarray], list[np.ndarray]]: Tuple of filtered images and labels.
     """
     remove = []
-    for label in tqdm(
+    for curr_label in tqdm(
         labels,
         desc="Filtering out labels and images with a single annotated pixel...",
     ):
-        instances = label[0]
+        instances = curr_label[0]
         if np.nonzero(instances)[0].size == 1:
             remove.append(True)
         else:
@@ -46,7 +46,7 @@ def _filter_labels_and_images(
             f"Removed {sum(remove)} images with a single pixel instance"
         )
     return [image for image, r in zip(images, remove) if not r], [
-        label for label, r in zip(labels, remove) if not r
+        curr_label for curr_label, r in zip(labels, remove) if not r
     ]
 
 
@@ -454,7 +454,9 @@ def get_class_weights(class_counts: np.ndarray) -> np.ndarray:
     )
     positive_counts = class_counts[class_counts > 0]
     if positive_counts.size == 0:
-        raise ValueError("Cannot compute class weights with no positive class counts")
+        raise ValueError(
+            "Cannot compute class weights with no positive class counts"
+        )
     median_count = np.median(positive_counts)
     inv_freq = np.zeros_like(class_counts, dtype=np.float64)
     inv_freq[class_counts > 0] = median_count / class_counts[class_counts > 0]
