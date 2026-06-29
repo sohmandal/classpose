@@ -42,6 +42,7 @@ import argparse
 import gc
 import json
 import logging
+import queue
 import re
 import threading
 import time
@@ -57,6 +58,7 @@ import shapely
 import torch
 import torch.multiprocessing as tmproc
 from matplotlib import colormaps
+from scipy import ndimage
 from scipy.spatial import KDTree
 from skimage import color, measure
 from tqdm import tqdm
@@ -91,6 +93,9 @@ DEFAULT_TILE_SIZE = 1024
 DEFAULT_OVERLAP = 64
 MAX_QUEUE_SIZE = 2048
 MIN_TILE_SIZE = 256
+DEFAULT_INFERENCE_THREADS_GPU = 2
+DEFAULT_INFERENCE_THREADS_CPU_MPS = 1
+DEFAULT_PROCS_PER_GPU = 1
 COLORMAP = [[int(y * 255) for y in x] for x in colormaps["Set3"].colors]
 
 
@@ -593,20 +598,26 @@ class PostProcessor:
             else:
                 masks = datum
                 class_masks = None
-            u = np.unique(masks)
-            u = u[u > 0]
+            object_slices = ndimage.find_objects(masks)
             curr_cells = []
-            for i in u:
-                cell_mask = masks == i
-                curr_coords = (
-                    cv2.findContours(
-                        np.uint8(cell_mask),
-                        cv2.RETR_EXTERNAL,
-                        cv2.CHAIN_APPROX_SIMPLE,
-                    )[0][0][:, 0]
-                    * prediction_to_slide_scale
-                    + coords
+            for label_idx, object_slice in enumerate(object_slices, start=1):
+                if object_slice is None:
+                    continue
+                y_slice, x_slice = object_slice
+                cell_mask = masks[y_slice, x_slice] == label_idx
+                contours = cv2.findContours(
+                    np.uint8(cell_mask),
+                    cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_SIMPLE,
+                )[0]
+                if len(contours) == 0:
+                    self.n_invalid_cells.value += 1
+                    continue
+                # Contour only the object bbox, then shift back to tile coordinates.
+                curr_coords = contours[0][:, 0] + np.array(
+                    [x_slice.start, y_slice.start]
                 )
+                curr_coords = curr_coords * prediction_to_slide_scale + coords
                 # discard invalid polygons as these cannot be read in QuPath
                 if curr_coords.shape[0] < 4:
                     self.n_invalid_cells.value += 1
@@ -620,7 +631,7 @@ class PostProcessor:
                 curr_coords.append(curr_coords[0].copy())
 
                 if class_masks is not None:
-                    cl = class_masks[cell_mask][0]
+                    cl = class_masks[y_slice, x_slice][cell_mask][0]
                     label = self.labels[int(cl) - 1]
                     color = COLORMAP[int(cl) - 1]
                     class_int = int(cl) - 1
@@ -661,7 +672,8 @@ def worker(
     slide_downsample: float = 1,
     bsize: int = 256,
     prediction_to_slide_scale: float = 1,
-    bf16: bool = False,
+    precision: str = "bf16",
+    inference_threads: int | None = None,
 ):
     """
     Worker function for parallel prediction of tiles. Takes a number of shared
@@ -684,11 +696,21 @@ def worker(
         slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
         prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
+        precision (str): Inference precision ('fp32', 'fp16' or 'bf16').
+        inference_threads (int): Number of threads overlapping the gpu forward
+            pass with cpu pre/post-processing. Defaults to None (2 if device is
+            'cuda' and 1 if device is 'cpu' or 'mps').
     """
     if isinstance(dev, str):
         dev = torch.device(dev)
     model = None
     tile = masks = raw_data = class_masks = styles = None
+
+    if inference_threads is None:
+        if dev.type == "cuda":
+            inference_threads = DEFAULT_INFERENCE_THREADS_GPU
+        else:
+            inference_threads = DEFAULT_INFERENCE_THREADS_CPU_MPS
 
     try:
         model = ClassposeModel(
@@ -697,12 +719,25 @@ def worker(
             device=dev,
             nclasses=n_classes,
             feature_transformation_structure=fts,
+            precision=precision,
         )
         model.net.eval()
-        if bf16:
-            model.net = model.net.half()
         if dev.type == "cuda":
             model.net = torch.compile(model.net)
+
+        n_threads = max(1, inference_threads)
+        local_q: queue.Queue = queue.Queue(maxsize=n_threads * 2)
+        update_lock = threading.Lock()
+
+        def _feeder():
+            """Move tiles from the shared queue into the local queue."""
+            while True:
+                tile, coords = slide_queue.get()
+                if tile is None:
+                    break
+                local_q.put((tile, coords))
+            for _ in range(n_threads):
+                local_q.put(None)
 
         with tqdm(
             None,
@@ -710,10 +745,8 @@ def worker(
             position=1,
             total=0,
         ) as pbar:
-            while True:
-                tile, coords = slide_queue.get()
-                if tile is None:
-                    break
+
+            def _process(tile, coords):
                 masks, raw_data, class_masks, styles = model.eval(
                     [tile],
                     batch_size=batch_size,
@@ -728,14 +761,41 @@ def worker(
                         prediction_to_slide_scale,
                     )
                 )
-                predicted_tiles.value += 1
+                with update_lock:
+                    predicted_tiles.value += 1
+                    pbar.n = predicted_tiles.value
+                    pbar.total = slide_queue_size.value
+                    pbar.set_description(
+                        f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
+                    )
+                    pbar.refresh()
 
-                pbar.n = predicted_tiles.value
-                pbar.total = slide_queue_size.value
-                pbar.set_description(
-                    f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
-                )
-                pbar.refresh()
+            def _run_inference():
+                while True:
+                    item = local_q.get()
+                    if item is None:
+                        break
+                    _process(*item)
+
+            feeder = threading.Thread(target=_feeder, daemon=True)
+            feeder.start()
+
+            # Compile on the first tile single-threaded to avoid concurrent first-compilation.
+            first = local_q.get()
+            if first is None:
+                local_q.put(None)
+            else:
+                _process(*first)
+
+            inference_threads = [
+                threading.Thread(target=_run_inference, daemon=True)
+                for _ in range(n_threads)
+            ]
+            for t in inference_threads:
+                t.start()
+            for t in inference_threads:
+                t.join()
+            feeder.join()
 
             pbar.set_description(
                 f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
@@ -966,6 +1026,27 @@ def shapely_polygon_to_geojson(
     ]
 
 
+def _repair_geometry(
+    polygon: shapely.Geometry,
+) -> shapely.Geometry:
+    """
+    Repair an invalid geometry, preserving holes where possible.
+
+    Args:
+        polygon (shapely.Geometry): The geometry to repair.
+
+    Returns:
+        shapely.Geometry: A valid geometry.
+    """
+    try:
+        repaired = shapely.make_valid(polygon, method="structure")
+        if repaired.is_valid and not repaired.is_empty:
+            return repaired
+    except shapely.errors.GEOSException:
+        pass
+    return polygon.buffer(0)
+
+
 def make_valid(
     polygon: shapely.Polygon | shapely.MultiPolygon | shapely.Geometry,
 ) -> shapely.Polygon | shapely.MultiPolygon | shapely.GeometryCollection:
@@ -983,7 +1064,7 @@ def make_valid(
     if isinstance(polygon, shapely.Polygon):
         if polygon.is_valid:
             return polygon
-        return shapely.make_valid(polygon, method="structure")
+        return _repair_geometry(polygon)
 
     if isinstance(polygon, shapely.MultiPolygon):
         geoms = []
@@ -999,7 +1080,7 @@ def make_valid(
             return geoms[0]
         return shapely.MultiPolygon(geoms)
 
-    return shapely.make_valid(polygon, method="structure")
+    return _repair_geometry(polygon)
 
 
 def load_roi_polygons(
@@ -1481,7 +1562,8 @@ def main(args):
                     ts,
                     256,
                     prediction_to_slide_scale,
-                    args.bf16,
+                    args.precision,
+                    args.inference_threads,
                 ),
             )
             p.start()
@@ -1505,7 +1587,8 @@ def main(args):
             slide_downsample=ts,
             bsize=256,
             prediction_to_slide_scale=prediction_to_slide_scale,
-            bf16=args.bf16,
+            precision=args.precision,
+            inference_threads=args.inference_threads,
         )
 
     pp.p.join()
@@ -1885,10 +1968,12 @@ def main_with_args():
         "Multi-GPU execution can be specified as 'cuda:0,1' or 'cuda:0,1,2,3'.",
     )
     parser.add_argument(
-        "--bf16",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Triggers bf16 inference.",
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["fp32", "fp16", "bf16"],
+        help="Inference precision. 'bf16' falls back to 'fp16' on GPUs without "
+        "hardware bf16 support.",
     )
     parser.add_argument(
         "--tile_size",
@@ -1922,6 +2007,14 @@ def main_with_args():
         "'csv' generates cellular density statistics (cells/mm²) per class. "
         "'spatialdata' generates a unified SpatialData Zarr store containing all outputs. "
         "Can specify multiple types separated by spaces (e.g., --output_type csv spatialdata).",
+    )
+    parser.add_argument(
+        "--inference_threads",
+        type=int,
+        default=None,
+        help="Number of inference threads per worker process. Values >1 overlap the "
+        "GPU forward pass with CPU pre/post-processing. Defaults to 2 if device is "
+        "`cuda` and 1 if device is `cpu` or `mps`",
     )
     args = parser.parse_args()
 

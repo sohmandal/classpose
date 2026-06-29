@@ -177,7 +177,7 @@ def main(args):
         device=device,
         nclasses=n_classes,
         feature_transformation_structure=feature_transformation_structure,
-        bf16=args.bf16,
+        precision=args.precision,
     )
 
     if os.environ.get("COMPILE_MODEL", "") == "1":
@@ -318,10 +318,12 @@ if __name__ == "__main__":
         help="Path to the test dataset directory (must contain images.npy and optionally labels.npy).",
     )
     parser.add_argument(
-        "--bf16",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Triggers half precision inference.",
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["fp32", "fp16", "bf16"],
+        help="Inference precision. 'bf16' falls back to 'fp16' on GPUs without "
+        "hardware bf16 support.",
     )
     parser.add_argument(
         "--tta",

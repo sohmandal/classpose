@@ -172,8 +172,12 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
         } catch (Throwable ignored) {}
 
         // Advanced
-        CheckBox cbBf16 = new CheckBox("Enable bf16");
-        grid.add(cbBf16, 1, row++);
+        ComboBox<String> cboPrecision = new ComboBox<>();
+        cboPrecision.getItems().addAll("bf16", "fp16", "fp32");
+        cboPrecision.setEditable(false);
+        cboPrecision.setValue("bf16");
+        grid.add(new Label("Precision"), 0, row);
+        grid.add(cboPrecision, 1, row++);
 
         CheckBox cbTTA = new CheckBox("Enable TTA");
         grid.add(cbTTA, 1, row++);
@@ -313,7 +317,7 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
         try {
             String G = "predict";
             cbTTA.setSelected(Prefs.getBoolean(Prefs.k(G, "tta"), cbTTA.isSelected()));
-            cbBf16.setSelected(Prefs.getBoolean(Prefs.k(G, "bf16"), cbBf16.isSelected()));
+            cboPrecision.setValue(Prefs.getString(Prefs.k(G, "precision"), cboPrecision.getValue()));
             cbTissue.setSelected(Prefs.getBoolean(Prefs.k(G, "tissue"), cbTissue.isSelected()));
             cbArtefacts.setSelected(Prefs.getBoolean(Prefs.k(G, "artefacts"), cbArtefacts.isSelected()));
             cbROI.setSelected(Prefs.getBoolean(Prefs.k(G, "roi"), false));
@@ -407,7 +411,7 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
             }
 
             if (cbTTA.isSelected()) builder.flag("--tta");
-            if (cbBf16.isSelected()) builder.flag("--bf16");
+            builder.opt("--precision", cboPrecision.getValue());
             // Compute Python device string
             String deviceSelection = cboDevice.getSelectionModel().getSelectedItem();
             String deviceKind = null;
@@ -446,7 +450,7 @@ public class ClassposePredictWSIAction extends AbstractClassposeAction {
                 Prefs.putString("model_path", modelArg);
                 Prefs.putString("output_folder", tfOut.getText().trim());
                 Prefs.putBoolean(Prefs.k(G, "tta"), cbTTA.isSelected());
-                Prefs.putBoolean(Prefs.k(G, "bf16"), cbBf16.isSelected());
+                Prefs.putString(Prefs.k(G, "precision"), cboPrecision.getValue());
                 Prefs.putBoolean(Prefs.k(G, "tissue"), cbTissue.isSelected());
                 Prefs.putBoolean(Prefs.k(G, "artefacts"), cbArtefacts.isSelected());
                 Prefs.putBoolean(Prefs.k(G, "roi"), cbROI.isSelected());
