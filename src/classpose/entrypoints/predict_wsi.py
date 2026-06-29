@@ -93,7 +93,8 @@ DEFAULT_TILE_SIZE = 1024
 DEFAULT_OVERLAP = 64
 MAX_QUEUE_SIZE = 2048
 MIN_TILE_SIZE = 256
-DEFAULT_INFERENCE_THREADS = 2
+DEFAULT_INFERENCE_THREADS_GPU = 2
+DEFAULT_INFERENCE_THREADS_CPU_MPS = 1
 DEFAULT_PROCS_PER_GPU = 1
 COLORMAP = [[int(y * 255) for y in x] for x in colormaps["Set3"].colors]
 
@@ -672,7 +673,7 @@ def worker(
     bsize: int = 256,
     prediction_to_slide_scale: float = 1,
     precision: str = "bf16",
-    inference_threads: int = DEFAULT_INFERENCE_THREADS,
+    inference_threads: int | None = None,
 ):
     """
     Worker function for parallel prediction of tiles. Takes a number of shared
@@ -695,11 +696,21 @@ def worker(
         slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
         prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
+        precision (str): Inference precision ('fp32', 'fp16' or 'bf16').
+        inference_threads (int): Number of threads overlapping the gpu forward
+            pass with cpu pre/post-processing. Defaults to None (2 if device is
+            'cuda' and 1 if device is 'cpu' or 'mps').
     """
     if isinstance(dev, str):
         dev = torch.device(dev)
     model = None
     tile = masks = raw_data = class_masks = styles = None
+
+    if inference_threads is None:
+        if dev.type == "cuda":
+            inference_threads = DEFAULT_INFERENCE_THREADS_GPU
+        else:
+            inference_threads = DEFAULT_INFERENCE_THREADS_CPU_MPS
 
     try:
         model = ClassposeModel(
@@ -2000,9 +2011,10 @@ def main_with_args():
     parser.add_argument(
         "--inference-threads",
         type=int,
-        default=DEFAULT_INFERENCE_THREADS,
+        default=None,
         help="Number of inference threads per worker process. Values >1 overlap the "
-        "GPU forward pass with CPU pre/post-processing.",
+        "GPU forward pass with CPU pre/post-processing. Defaults to 2 if device is "
+        "`cuda` and 1 if device is `cpu` or `mps`",
     )
     args = parser.parse_args()
 

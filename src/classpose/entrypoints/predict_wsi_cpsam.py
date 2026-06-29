@@ -66,7 +66,8 @@ from classpose.entrypoints.outputs import (
     map_cells_to_roi_classes,
 )
 from classpose.entrypoints.predict_wsi import (
-    DEFAULT_INFERENCE_THREADS,
+    DEFAULT_INFERENCE_THREADS_GPU,
+    DEFAULT_INFERENCE_THREADS_CPU_MPS,
     DEFAULT_OVERLAP,
     DEFAULT_PROCS_PER_GPU,
     DEFAULT_TILE_SIZE,
@@ -110,7 +111,7 @@ def worker(
     bsize: int = 256,
     prediction_to_slide_scale: float = 1,
     precision: str = "bf16",
-    inference_threads: int = DEFAULT_INFERENCE_THREADS,
+    inference_threads: int | None = None,
 ):
     """
     Worker function for parallel prediction of tiles. Takes a number of shared
@@ -133,12 +134,19 @@ def worker(
         prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
         precision (str): Inference precision ('fp32', 'fp16' or 'bf16').
         inference_threads (int): Number of threads overlapping the gpu forward
-            pass with cpu pre/post-processing.
+            pass with cpu pre/post-processing. Defaults to None (2 if device is
+            'cuda' and 1 if device is 'cpu' or 'mps').
     """
     if isinstance(dev, str):
         dev = torch.device(dev)
     model = None
     tile = masks = raw_data = styles = None
+
+    if inference_threads is None:
+        if dev.type == "cuda":
+            inference_threads = DEFAULT_INFERENCE_THREADS_GPU
+        else:
+            inference_threads = DEFAULT_INFERENCE_THREADS_CPU_MPS
 
     try:
         model = CellposeModel(
@@ -794,9 +802,10 @@ def main_with_args():
     parser.add_argument(
         "--inference-threads",
         type=int,
-        default=DEFAULT_INFERENCE_THREADS,
+        default=None,
         help="Number of inference threads per worker process. Values >1 overlap the "
-        "GPU forward pass with CPU pre/post-processing.",
+        "GPU forward pass with CPU pre/post-processing. Defaults to 2 if device is "
+        "`cuda` and 1 if device is `cpu` or `mps`",
     )
     args = parser.parse_args()
 
