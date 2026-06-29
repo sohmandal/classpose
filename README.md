@@ -94,8 +94,7 @@ Optional arguments:
                         per process. Increase only with spare memory. (default: 1)
   --inference-threads INFERENCE_THREADS
                         Number of inference threads per worker process. Values >1 overlap the
-                        gpu forward pass with cpu pre/post-processing. No extra VRAM cost.
-                        (default: 2)
+                        gpu forward pass with cpu pre/post-processing. (default: 2)
 ```
 
 **Important:**
@@ -104,7 +103,7 @@ Optional arguments:
 - **Tissue / artefact models:** specifying either `--tissue_detection_model_path` or `--artefact_detection_model_path` will download the corresponding GrandQC models to that path if they are not present. This makes use of the GrandQC models available in Zenodo ([tissue model](https://zenodo.org/records/14507273) and [artefact model](https://zenodo.org/records/14041538)). Please note that if you use any part of Classpose which makes use of GrandQC please follow the instructions at [here](https://github.com/cpath-ukk/grandqc/tree/main) to cite them appropriately. Similarly to Classpose, GrandQC is under a non-commercial license whose terms can be found at [here](https://github.com/cpath-ukk/grandqc/blob/main/LICENSE).
 - **Output types:** if you request `--output_type csv` or `--output_type spatialdata` (or both), `--tissue_detection_model_path` **must** be provided; otherwise the CLI will error.
 - **ROI-aware densities:** when `--roi_geojson` and `--output_type` include `csv` and/or `spatialdata`, densities are computed per ROI class. If `--roi_class_priority` is given, it is used to resolve cells that fall into overlapping ROIs.
-- **Throughput on multi-GPU machines:** inference threading is on by default (`--inference-threads 2`) and overlaps the GPU forward pass with CPU pre/post-processing at no extra VRAM cost. If you have spare GPU memory, `--procs-per-gpu 2` runs multiple worker processes per GPU to post-process tiles in true parallel and push GPU utilisation higher, at the cost of replicating the model in VRAM per process.
+- **Throughput on multi-GPU machines:** inference threading is on by default (`--inference-threads 2`) and get us close to the GPU forward pass being overlapped with the CPU pre/post-processing: we have found that modern GPUs (at least RTX 3090 equivalent or above) can easily have two Classpose models running on the same GPU through threading as the post-processing (mask computation) can take longer than the inference itself. If you have spare GPU memory, `--procs-per-gpu 2` runs multiple worker processes per GPU to post-process tiles in true parallel and push GPU utilisation higher, at the cost of replicating the model in VRAM per process.
 
 Examples:
 

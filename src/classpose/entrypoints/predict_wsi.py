@@ -2003,19 +2003,19 @@ def main_with_args():
         "Can specify multiple types separated by spaces (e.g., --output_type csv spatialdata).",
     )
     parser.add_argument(
-        "--procs-per-gpu",
-        type=int,
-        default=DEFAULT_PROCS_PER_GPU,
-        help="Number of worker processes per gpu. Values >1 raise gpu utilisation "
-        "by post-processing tiles in parallel, but replicate the model in vram per "
-        "process. Increase only with spare memory.",
-    )
-    parser.add_argument(
         "--inference-threads",
         type=int,
         default=DEFAULT_INFERENCE_THREADS,
         help="Number of inference threads per worker process. Values >1 overlap the "
-        "gpu forward pass with cpu pre/post-processing.",
+        "GPU forward pass with CPU pre/post-processing.",
+    )
+    parser.add_argument(
+        "--procs-per-gpu",
+        type=int,
+        default=DEFAULT_PROCS_PER_GPU,
+        help="Number of worker processes per gpu. Values >1 raise gpu utilisation "
+        "by post-processing tiles in parallel, but replicate the model in VRAM per "
+        "process. Increase only with spare memory.",
     )
     args = parser.parse_args()
 
