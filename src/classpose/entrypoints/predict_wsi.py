@@ -1473,7 +1473,9 @@ def main(args):
     predicted_tiles_value = manager.Value("i", 0)
 
     devices = get_device(args.device)
-    worker_devices = [d for d in devices for _ in range(max(1, args.procs_per_gpu))]
+    worker_devices = [
+        d for d in devices for _ in range(max(1, args.procs_per_gpu))
+    ]
 
     logger.info(f"Starting inference with model: {model_config.path}")
     fts, n_classes = infer_structure(model_config.path)
@@ -1501,7 +1503,9 @@ def main(args):
         device=devices[0],
         termination_event=termination_event,
     )
-    pp = PostProcessor(labels=labels, manager=manager, n_workers=len(worker_devices))
+    pp = PostProcessor(
+        labels=labels, manager=manager, n_workers=len(worker_devices)
+    )
     # Wait for slide to be initialized so that the target scale is known
     while slide.ts.value == 0:
         time.sleep(0.1)
@@ -2011,7 +2015,7 @@ def main_with_args():
         type=int,
         default=DEFAULT_INFERENCE_THREADS,
         help="Number of inference threads per worker process. Values >1 overlap the "
-        "gpu forward pass with cpu pre/post-processing. No extra VRAM cost.",
+        "gpu forward pass with cpu pre/post-processing.",
     )
     args = parser.parse_args()
 
