@@ -1473,9 +1473,6 @@ def main(args):
     predicted_tiles_value = manager.Value("i", 0)
 
     devices = get_device(args.device)
-    worker_devices = [
-        d for d in devices for _ in range(max(1, args.procs_per_gpu))
-    ]
 
     logger.info(f"Starting inference with model: {model_config.path}")
     fts, n_classes = infer_structure(model_config.path)
@@ -1496,16 +1493,14 @@ def main(args):
         overlap=args.overlap,
         train_mpp=model_config.mpp,
         manager=manager,
-        n_none=len(worker_devices),
+        n_none=len(devices),
         tissue_detection_model_path=args.tissue_detection_model_path,
         min_area=args.min_area,
         roi_tree=roi_tree,
         device=devices[0],
         termination_event=termination_event,
     )
-    pp = PostProcessor(
-        labels=labels, manager=manager, n_workers=len(worker_devices)
-    )
+    pp = PostProcessor(labels=labels, manager=manager, n_workers=len(devices))
     # Wait for slide to be initialized so that the target scale is known
     while slide.ts.value == 0:
         time.sleep(0.1)
@@ -1533,10 +1528,10 @@ def main(args):
     drain_thread = threading.Thread(target=_drain_polygons, daemon=True)
     drain_thread.start()
 
-    if len(worker_devices) > 1:
+    if len(devices) > 1:
         workers = []
-        logger.info(f"Starting workers on devices: {worker_devices}")
-        for device in worker_devices:
+        logger.info(f"Starting workers on devices: {devices}")
+        for device in devices:
             logger.info(f"Starting worker on device: {device}")
             p = tmproc.Process(
                 target=worker,
@@ -2008,14 +2003,6 @@ def main_with_args():
         default=DEFAULT_INFERENCE_THREADS,
         help="Number of inference threads per worker process. Values >1 overlap the "
         "GPU forward pass with CPU pre/post-processing.",
-    )
-    parser.add_argument(
-        "--procs-per-gpu",
-        type=int,
-        default=DEFAULT_PROCS_PER_GPU,
-        help="Number of worker processes per gpu. Values >1 raise gpu utilisation "
-        "by post-processing tiles in parallel, but replicate the model in VRAM per "
-        "process. Increase only with spare memory.",
     )
     args = parser.parse_args()
 

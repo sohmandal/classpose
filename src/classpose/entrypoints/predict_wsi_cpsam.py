@@ -270,9 +270,6 @@ def main(args):
     predicted_tiles_value = manager.Value("i", 0)
 
     devices = get_device(args.device)
-    worker_devices = [
-        d for d in devices for _ in range(max(1, args.procs_per_gpu))
-    ]
 
     logger.info(
         "Starting inference with CellposeSAM model: %s", args.model_path
@@ -283,14 +280,14 @@ def main(args):
         overlap=args.overlap,
         train_mpp=args.train_mpp,
         manager=manager,
-        n_none=len(worker_devices),
+        n_none=len(devices),
         tissue_detection_model_path=args.tissue_detection_model_path,
         min_area=args.min_area,
         roi_tree=roi_tree,
         device=devices[0],
         termination_event=termination_event,
     )
-    pp = PostProcessor(manager=manager, n_workers=len(worker_devices))
+    pp = PostProcessor(manager=manager, n_workers=len(devices))
 
     # Wait for slide to be initialized so that the target downsample is known
     while slide.ts.value == 0:
@@ -315,10 +312,10 @@ def main(args):
     drain_thread = threading.Thread(target=_drain_polygons, daemon=True)
     drain_thread.start()
 
-    if len(worker_devices) > 1:
+    if len(devices) > 1:
         workers = []
-        logger.info("Starting workers on devices: %s", worker_devices)
-        for device in worker_devices:
+        logger.info("Starting workers on devices: %s", devices)
+        for device in devices:
             logger.info("Starting worker on device: %s", device)
             p = tmproc.Process(
                 target=worker,
@@ -800,14 +797,6 @@ def main_with_args():
         default=DEFAULT_INFERENCE_THREADS,
         help="Number of inference threads per worker process. Values >1 overlap the "
         "GPU forward pass with CPU pre/post-processing.",
-    )
-    parser.add_argument(
-        "--procs-per-gpu",
-        type=int,
-        default=DEFAULT_PROCS_PER_GPU,
-        help="Number of worker processes per gpu. Values >1 raise gpu utilisation "
-        "by post-processing tiles in parallel, but replicate the model in VRAM per "
-        "process. Increase only with spare memory.",
     )
     args = parser.parse_args()
 
