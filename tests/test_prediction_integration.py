@@ -67,6 +67,7 @@ def test_predict_wsi_integration(small_region_svs, output_dir):
             "precision": "fp32",
             "overlap": 64,
             "output_type": None,
+            "inference_threads": 2,
         },
     )
 
@@ -112,6 +113,7 @@ def test_predict_wsi_multi_gpu_integration(small_region_svs, output_dir):
             "precision": "fp32",
             "overlap": 64,
             "output_type": None,
+            "inference_threads": 2,
         },
     )
 
@@ -151,6 +153,7 @@ def test_predict_wsi_cpsam_integration(small_region_svs, output_dir):
             "precision": "fp32",
             "overlap": 64,
             "output_type": None,
+            "inference_threads": 2,
         },
     )
 
