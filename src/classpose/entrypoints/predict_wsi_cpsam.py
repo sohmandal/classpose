@@ -44,6 +44,7 @@ import argparse
 import gc
 import json
 import logging
+import queue
 import threading
 import time
 from pathlib import Path
@@ -65,7 +66,10 @@ from classpose.entrypoints.outputs import (
     map_cells_to_roi_classes,
 )
 from classpose.entrypoints.predict_wsi import (
+    DEFAULT_INFERENCE_THREADS_GPU,
+    DEFAULT_INFERENCE_THREADS_CPU_MPS,
     DEFAULT_OVERLAP,
+    DEFAULT_PROCS_PER_GPU,
     DEFAULT_TILE_SIZE,
     DEFAULT_TRAIN_MPP,
     MIN_TILE_SIZE,
@@ -82,6 +86,7 @@ from classpose.entrypoints.predict_wsi import (
 )
 from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.log import get_logger
+from classpose.models import resolve_precision
 from classpose.utils import (
     get_device,
     get_geojson_output_filename,
@@ -105,7 +110,8 @@ def worker(
     slide_downsample: float = 1,
     bsize: int = 256,
     prediction_to_slide_scale: float = 1,
-    bf16: bool = False,
+    precision: str = "bf16",
+    inference_threads: int | None = None,
 ):
     """
     Worker function for parallel prediction of tiles. Takes a number of shared
@@ -126,12 +132,21 @@ def worker(
         slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
         prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
-        bf16 (bool): Whether to use bfloat16.
+        precision (str): Inference precision ('fp32', 'fp16' or 'bf16').
+        inference_threads (int): Number of threads overlapping the gpu forward
+            pass with cpu pre/post-processing. Defaults to None (2 if device is
+            'cuda' and 1 if device is 'cpu' or 'mps').
     """
     if isinstance(dev, str):
         dev = torch.device(dev)
     model = None
     tile = masks = raw_data = styles = None
+
+    if inference_threads is None:
+        if dev.type == "cuda":
+            inference_threads = DEFAULT_INFERENCE_THREADS_GPU
+        else:
+            inference_threads = DEFAULT_INFERENCE_THREADS_CPU_MPS
 
     try:
         model = CellposeModel(
@@ -139,11 +154,26 @@ def worker(
             pretrained_model=model_path,
             device=dev,
         )
-        if bf16:
-            model.net = model.net.to(torch.bfloat16)
+        dtype = resolve_precision(precision, dev)
+        if dtype is not torch.float32:
+            model.net = model.net.to(dtype)
         if dev.type == "cuda":
             model.net = model.net.to(dev)
             model.net = torch.compile(model.net)
+
+        n_threads = max(1, inference_threads)
+        local_q: queue.Queue = queue.Queue(maxsize=n_threads * 2)
+        update_lock = threading.Lock()
+
+        def _feeder():
+            """Move tiles from the shared queue into the local queue."""
+            while True:
+                tile, coords = slide_queue.get()
+                if tile is None:
+                    break
+                local_q.put((tile, coords))
+            for _ in range(n_threads):
+                local_q.put(None)
 
         with tqdm(
             None,
@@ -151,10 +181,8 @@ def worker(
             position=1,
             total=0,
         ) as pbar:
-            while True:
-                tile, coords = slide_queue.get()
-                if tile is None:
-                    break
+
+            def _process(tile, coords):
                 masks, raw_data, styles = model.eval(
                     [tile],
                     batch_size=batch_size,
@@ -169,15 +197,42 @@ def worker(
                 postproc_queue.put(
                     (batch_masks, [coords], prediction_to_slide_scale)
                 )
-                predicted_tiles.value += 1
+                with update_lock:
+                    predicted_tiles.value += 1
+                    pbar.n = predicted_tiles.value
+                    pbar.total = slide_queue_size.value
+                    pbar.set_description(
+                        "Predicted tiles (detected cells: %s; invalid: %s)"
+                        % (n_cells.value, n_invalid_cells.value)
+                    )
+                    pbar.refresh()
 
-                pbar.n = predicted_tiles.value
-                pbar.total = slide_queue_size.value
-                pbar.set_description(
-                    "Predicted tiles (detected cells: %s; invalid: %s)"
-                    % (n_cells.value, n_invalid_cells.value)
-                )
-                pbar.refresh()
+            def _run_inference():
+                while True:
+                    item = local_q.get()
+                    if item is None:
+                        break
+                    _process(*item)
+
+            feeder = threading.Thread(target=_feeder, daemon=True)
+            feeder.start()
+
+            # Compile on the first tile single-threaded to avoid concurrent first-compilation.
+            first = local_q.get()
+            if first is None:
+                local_q.put(None)
+            else:
+                _process(*first)
+
+            inference_threads = [
+                threading.Thread(target=_run_inference, daemon=True)
+                for _ in range(n_threads)
+            ]
+            for t in inference_threads:
+                t.start()
+            for t in inference_threads:
+                t.join()
+            feeder.join()
 
             pbar.set_description(
                 "Predicted tiles (detected cells: %s; invalid: %s)"
@@ -286,7 +341,8 @@ def main(args):
                     ts,
                     256,
                     prediction_to_slide_scale,
-                    args.bf16,
+                    args.precision,
+                    args.inference_threads,
                 ),
             )
             p.start()
@@ -308,7 +364,8 @@ def main(args):
             slide_downsample=ts,
             bsize=256,
             prediction_to_slide_scale=prediction_to_slide_scale,
-            bf16=args.bf16,
+            precision=args.precision,
+            inference_threads=args.inference_threads,
         )
 
     pp.p.join()
@@ -708,10 +765,12 @@ def main_with_args():
         help="Tile size for inference.",
     )
     parser.add_argument(
-        "--bf16",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Triggers bf16 inference.",
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["fp32", "fp16", "bf16"],
+        help="Inference precision. 'bf16' falls back to 'fp16' on GPUs without "
+        "hardware bf16 support.",
     )
     parser.add_argument(
         "--overlap",
@@ -739,6 +798,14 @@ def main_with_args():
         "'csv' generates cellular density statistics (cells/mm²) per class. "
         "'spatialdata' generates a unified SpatialData Zarr store containing all outputs. "
         "Can specify multiple types separated by spaces (e.g., --output_type csv spatialdata).",
+    )
+    parser.add_argument(
+        "--inference_threads",
+        type=int,
+        default=None,
+        help="Number of inference threads per worker process. Values >1 overlap the "
+        "GPU forward pass with CPU pre/post-processing. Defaults to 2 if device is "
+        "`cuda` and 1 if device is `cpu` or `mps`",
     )
     args = parser.parse_args()
 
