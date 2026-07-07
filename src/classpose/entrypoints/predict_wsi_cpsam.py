@@ -40,21 +40,20 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="spatialdata")
 warnings.filterwarnings("ignore", message=".*ImplicitModification.*")
 warnings.filterwarnings("ignore", message=".*Transforming to str index.*")
 
-import os
 import argparse
+import gc
 import json
 import logging
+import queue
+import threading
 import time
-import uuid
 from pathlib import Path
+from multiprocessing import Event
 
-import cv2
-import numpy as np
 import shapely
 import torch
 import torch.multiprocessing as tmproc
 from cellpose.models import CellposeModel
-from openslide import OpenSlide
 from tqdm import tqdm
 
 for handler in logging.root.handlers[:]:
@@ -67,10 +66,14 @@ from classpose.entrypoints.outputs import (
     map_cells_to_roi_classes,
 )
 from classpose.entrypoints.predict_wsi import (
+    DEFAULT_INFERENCE_THREADS_GPU,
+    DEFAULT_INFERENCE_THREADS_CPU_MPS,
     DEFAULT_OVERLAP,
+    DEFAULT_PROCS_PER_GPU,
     DEFAULT_TILE_SIZE,
     DEFAULT_TRAIN_MPP,
     MIN_TILE_SIZE,
+    PostProcessor,
     SlideLoader,
     apply_bounds_offset_to_feature,
     deduplicate,
@@ -79,9 +82,11 @@ from classpose.entrypoints.predict_wsi import (
     load_roi_polygons,
     polygons_to_centroids,
     shapely_polygon_to_geojson,
+    to_geojson_polygon,
 )
 from classpose.grandqc.wsi_artefact_detection import detect_artefacts_wsi
 from classpose.log import get_logger
+from classpose.models import resolve_precision
 from classpose.utils import (
     get_device,
     get_geojson_output_filename,
@@ -89,135 +94,6 @@ from classpose.utils import (
 from classpose import WSIReader
 
 logger = get_logger("classpose")
-
-
-class PostProcessor:
-    """
-    Post processor class for parallel post processing of tiles.
-
-    The workflow consists in:
-
-    1. Using the instance prediction to identify all cells in the tile
-    2. Using the cell coordinates to create a polygon for each cell
-    3. Filtering out invalid polygons as these represent unlikely predictions
-    (i.e. the contour crosses itself at a given point)
-    4. Extraction of some minimal features (area, perimeter, centroid) which
-    can be used for deduplicating cells at a later stage
-    5. Adding the polygons to a list for later writing to a GeoJSON file.
-    """
-
-    def __init__(self, manager: tmproc.Manager = None):
-        """
-        Args:
-            manager (tmproc.Manager, optional): Manager to use for shared memory.
-        """
-
-        if manager is None:
-            manager = tmproc.Manager()
-
-        self.n = manager.Value("i", 0)
-        self.polygons = manager.Queue()
-        self.value = manager.Value("i", 0)
-        self.n_cells = manager.Value("i", 0)
-        self.n_invalid_cells = manager.Value("i", 0)
-        self.q = manager.Queue()
-        self.p = tmproc.Process(target=self.run)
-        self.p.start()
-
-    def run(self):
-        """
-        Generic run method for the process.
-        """
-        while True:
-            item = self.q.get()
-            if item is None:
-                break
-            self(*item)
-
-    def put(self, data: list[tuple]):
-        """
-        Puts data in the queue.
-
-        Args:
-            data (list[tuple]): Data to put in the queue.
-        """
-        self.q.put(data)
-
-    def __call__(
-        self,
-        data: list[np.ndarray],
-        batch_coords: list[tuple[int, int]],
-        ts: float,
-    ):
-        """
-        Data preprocessing following the aforementioned protocol. Appends everything
-        to the polygons list, which is a shared memory list.
-
-        Args:
-            data (list[np.ndarray]): Data to process. Should be a list of instance masks.
-            batch_coords (list[tuple[int, int]]): List of coordinates for the batch.
-            ts (float): Target downsample.
-        """
-        class_name = "cell"
-        class_color = [0, 168, 132]
-        for masks, coords in zip(data, batch_coords):
-            u = np.unique(masks)
-            u = u[u > 0]
-            curr_cells = []
-            for i in u:
-                cell_mask = masks == i
-                curr_coords = (
-                    cv2.findContours(
-                        np.uint8(cell_mask),
-                        cv2.RETR_EXTERNAL,
-                        cv2.CHAIN_APPROX_SIMPLE,
-                    )[0][0][:, 0]
-                    * ts
-                    + coords
-                )
-                # discard invalid polygons as these cannot be read in QuPath
-                if curr_coords.shape[0] < 4:
-                    self.n_invalid_cells.value += 1
-                    continue
-                polygon = shapely.Polygon(curr_coords)
-                if not polygon.is_valid:
-                    self.n_invalid_cells.value += 1
-                    continue
-                center = np.round(polygon.centroid.coords[0], 2).tolist()
-                curr_coords = curr_coords.tolist()
-                curr_coords.append(curr_coords[0])
-                curr_cell = {
-                    "type": "Feature",
-                    "id": str(uuid.uuid4()),
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [curr_coords],
-                    },
-                    "properties": {
-                        "objectType": "annotation",
-                        "isLocked": False,
-                        "classification": {
-                            "name": class_name,
-                            "color": class_color,
-                        },
-                        "measurements": [
-                            {"name": "area", "value": polygon.area},
-                            {"name": "perimeter", "value": polygon.length},
-                            {
-                                "name": "centroidX",
-                                "value": center[0],
-                            },
-                            {
-                                "name": "centroidY",
-                                "value": center[1],
-                            },
-                        ],
-                    },
-                }
-                curr_cells.append(curr_cell)
-            self.polygons.put(curr_cells)
-            self.n_cells.value += len(curr_cells)
-            self.value.value += 1
 
 
 def worker(
@@ -231,9 +107,11 @@ def worker(
     slide_queue_size: tmproc.Value,
     n_cells: tmproc.Value,
     n_invalid_cells: tmproc.Value,
+    slide_downsample: float = 1,
     bsize: int = 256,
-    target_downsample: float = 1,
-    bf16: bool = False,
+    prediction_to_slide_scale: float = 1,
+    precision: str = "bf16",
+    inference_threads: int | None = None,
 ):
     """
     Worker function for parallel prediction of tiles. Takes a number of shared
@@ -251,65 +129,128 @@ def worker(
         slide_queue_size (tmproc.Value): tmp Value to count total number of tiles.
         n_cells (tmproc.Value): tmp Value to count number of cells.
         n_invalid_cells (tmproc.Value): tmp Value to count number of invalid cells.
+        slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
-        target_downsample (float): Target downsample.
-        bf16 (bool): Whether to use bfloat16.
+        prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
+        precision (str): Inference precision ('fp32', 'fp16' or 'bf16').
+        inference_threads (int): Number of threads overlapping the gpu forward
+            pass with cpu pre/post-processing. Defaults to None (2 if device is
+            'cuda' and 1 if device is 'cpu' or 'mps').
     """
-    model = CellposeModel(
-        gpu=dev.type == "cuda",
-        pretrained_model=model_path,
-        device=dev,
-    )
-    if bf16:
-        model.net = model.net.to(torch.bfloat16)
     if isinstance(dev, str):
         dev = torch.device(dev)
-    if dev.type == "cuda":
-        model.net = model.net.to(dev)
-        model.net = torch.compile(model.net)
+    model = None
+    tile = masks = raw_data = styles = None
 
-    with tqdm(
-        None,
-        desc="Predicted tiles (detected cells: 0)",
-        position=1,
-        total=0,
-    ) as pbar:
-        while True:
-            tile, coords = slide_queue.get()
-            if tile is None:
-                break
-            masks, raw_data, styles = model.eval(
-                [tile],
-                batch_size=batch_size,
-                augment=tta,
-                bsize=bsize,
-                compute_masks=True,
-            )
-            if isinstance(masks, list):
-                batch_masks = masks
+    if inference_threads is None:
+        if dev.type == "cuda":
+            inference_threads = DEFAULT_INFERENCE_THREADS_GPU
+        else:
+            inference_threads = DEFAULT_INFERENCE_THREADS_CPU_MPS
+
+    try:
+        model = CellposeModel(
+            gpu=dev.type == "cuda",
+            pretrained_model=model_path,
+            device=dev,
+        )
+        dtype = resolve_precision(precision, dev)
+        if dtype is not torch.float32:
+            model.net = model.net.to(dtype)
+        if dev.type == "cuda":
+            model.net = model.net.to(dev)
+            model.net = torch.compile(model.net)
+
+        n_threads = max(1, inference_threads)
+        local_q: queue.Queue = queue.Queue(maxsize=n_threads * 2)
+        update_lock = threading.Lock()
+
+        def _feeder():
+            """Move tiles from the shared queue into the local queue."""
+            while True:
+                tile, coords = slide_queue.get()
+                if tile is None:
+                    break
+                local_q.put((tile, coords))
+            for _ in range(n_threads):
+                local_q.put(None)
+
+        with tqdm(
+            None,
+            desc="Predicted tiles (detected cells: 0)",
+            position=1,
+            total=0,
+        ) as pbar:
+
+            def _process(tile, coords):
+                masks, raw_data, styles = model.eval(
+                    [tile],
+                    batch_size=batch_size,
+                    augment=tta,
+                    bsize=bsize,
+                    compute_masks=True,
+                )
+                if isinstance(masks, list):
+                    batch_masks = masks
+                else:
+                    batch_masks = [masks]
+                postproc_queue.put(
+                    (batch_masks, [coords], prediction_to_slide_scale)
+                )
+                with update_lock:
+                    predicted_tiles.value += 1
+                    pbar.n = predicted_tiles.value
+                    pbar.total = slide_queue_size.value
+                    pbar.set_description(
+                        "Predicted tiles (detected cells: %s; invalid: %s)"
+                        % (n_cells.value, n_invalid_cells.value)
+                    )
+                    pbar.refresh()
+
+            def _run_inference():
+                while True:
+                    item = local_q.get()
+                    if item is None:
+                        break
+                    _process(*item)
+
+            feeder = threading.Thread(target=_feeder, daemon=True)
+            feeder.start()
+
+            # Compile on the first tile single-threaded to avoid concurrent first-compilation.
+            first = local_q.get()
+            if first is None:
+                local_q.put(None)
             else:
-                batch_masks = [masks]
-            postproc_queue.put((batch_masks, [coords], target_downsample))
-            predicted_tiles.value += 1
+                _process(*first)
 
-            pbar.n = predicted_tiles.value
-            pbar.total = slide_queue_size.value
+            inference_threads = [
+                threading.Thread(target=_run_inference, daemon=True)
+                for _ in range(n_threads)
+            ]
+            for t in inference_threads:
+                t.start()
+            for t in inference_threads:
+                t.join()
+            feeder.join()
+
             pbar.set_description(
                 "Predicted tiles (detected cells: %s; invalid: %s)"
                 % (n_cells.value, n_invalid_cells.value)
             )
-            pbar.refresh()
-
+            print()
+    finally:
+        tile = masks = raw_data = styles = None
+        model = None
+        gc.collect()
+        if dev.type == "cuda":
+            torch.cuda.empty_cache()
         postproc_queue.put(None)
-        pbar.set_description(
-            "Predicted tiles (detected cells: %s; invalid: %s)"
-            % (n_cells.value, n_invalid_cells.value)
-        )
-        print()
 
 
 def main(args):
     tmproc.set_start_method("spawn", force=True)
+    termination_event = Event()
 
     if args.tile_size < MIN_TILE_SIZE:
         raise ValueError(
@@ -352,12 +293,32 @@ def main(args):
         min_area=args.min_area,
         roi_tree=roi_tree,
         device=devices[0],
+        termination_event=termination_event,
     )
-    pp = PostProcessor(manager=manager)
+    pp = PostProcessor(manager=manager, n_workers=len(devices))
+
     # Wait for slide to be initialized so that the target downsample is known
     while slide.ts.value == 0:
         time.sleep(0.1)
     ts = float(slide.ts.value)
+    mpp_x = float(slide.mpp_x.value)
+    mpp_y = float(slide.mpp_y.value)
+    prediction_to_slide_scale = min(
+        args.train_mpp / mpp_x,
+        args.train_mpp / mpp_y,
+    )
+
+    collected_batches: list = []
+
+    def _drain_polygons():
+        while True:
+            item = pp.polygons.get()
+            if item is None:
+                break
+            collected_batches.append(item)
+
+    drain_thread = threading.Thread(target=_drain_polygons, daemon=True)
+    drain_thread.start()
 
     if len(devices) > 1:
         workers = []
@@ -377,9 +338,11 @@ def main(args):
                     slide.n,
                     pp.n_cells,
                     pp.n_invalid_cells,
-                    256,
                     ts,
-                    args.bf16,
+                    256,
+                    prediction_to_slide_scale,
+                    args.precision,
+                    args.inference_threads,
                 ),
             )
             p.start()
@@ -398,17 +361,22 @@ def main(args):
             slide_queue_size=slide.n,
             n_cells=pp.n_cells,
             n_invalid_cells=pp.n_invalid_cells,
+            slide_downsample=ts,
             bsize=256,
-            target_downsample=ts,
-            bf16=args.bf16,
+            prediction_to_slide_scale=prediction_to_slide_scale,
+            precision=args.precision,
+            inference_threads=args.inference_threads,
         )
+
     pp.p.join()
     slide.close()
+    pp.polygons.put(None)
+    drain_thread.join()
 
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
-        while not pp.polygons.empty():
-            polygons.extend(pp.polygons.get())
+        for batch in collected_batches:
+            polygons.extend([to_geojson_polygon(x) for x in batch])
             pbar.update()
     logger.info("Number of detected cells: %s", len(polygons))
     logger.info("Number of invalid cells: %s", pp.n_invalid_cells.value)
@@ -797,10 +765,12 @@ def main_with_args():
         help="Tile size for inference.",
     )
     parser.add_argument(
-        "--bf16",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Triggers bf16 inference.",
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["fp32", "fp16", "bf16"],
+        help="Inference precision. 'bf16' falls back to 'fp16' on GPUs without "
+        "hardware bf16 support.",
     )
     parser.add_argument(
         "--overlap",
@@ -828,6 +798,14 @@ def main_with_args():
         "'csv' generates cellular density statistics (cells/mm²) per class. "
         "'spatialdata' generates a unified SpatialData Zarr store containing all outputs. "
         "Can specify multiple types separated by spaces (e.g., --output_type csv spatialdata).",
+    )
+    parser.add_argument(
+        "--inference_threads",
+        type=int,
+        default=None,
+        help="Number of inference threads per worker process. Values >1 overlap the "
+        "GPU forward pass with CPU pre/post-processing. Defaults to 2 if device is "
+        "`cuda` and 1 if device is `cpu` or `mps`",
     )
     args = parser.parse_args()
 

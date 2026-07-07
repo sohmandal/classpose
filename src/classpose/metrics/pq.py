@@ -12,22 +12,91 @@ from classpose.metrics.utils import (
 
 
 class MulticlassPQCalculator:
-    def __init__(self, nr_classes: int, match_iou: float):
+    """
+    Callable that computes multi-class PQ info for a single image pair.
+
+    Designed to be used with :func:`multiprocessing.Pool.imap_unordered` so
+    that per-image PQ computation can be parallelised.
+    """
+
+    def __init__(
+        self,
+        nr_classes: int,
+        match_iou: float,
+        no_border_instances: bool = False,
+    ):
+        """
+        Initialise the calculator.
+
+        Args:
+            nr_classes (int): Number of foreground classes.
+            match_iou (float): IoU threshold for matching instances.
+            no_border_instances (bool, optional): If ``True``, instances
+                touching the image border are removed before metric
+                computation. Defaults to False.
+        """
         self.nr_classes = nr_classes
         self.match_iou = match_iou
+        self.no_border_instances = no_border_instances
 
-    def __call__(self, gt_pred_idx):
+    def __call__(
+        self, gt_pred_idx: tuple[np.ndarray, np.ndarray, int]
+    ) -> tuple[list, int]:
+        """
+        Compute PQ info for one ground-truth / prediction pair.
+
+        Args:
+            gt_pred_idx (tuple[np.ndarray, np.ndarray, int]): A tuple of
+                ``(gt_mask, pred_mask, image_index)``.
+
+        Returns:
+            tuple[list, int]: Per-class PQ statistics and the image index.
+        """
         gt, pred, idx = gt_pred_idx
+        if self.no_border_instances:
+            gt = remove_border_instances(gt)
+            pred = remove_border_instances(pred)
         pq_info = get_multi_pq_info(
             gt, pred, nr_classes=self.nr_classes, match_iou=self.match_iou
         )
         return pq_info, idx
 
 
+def remove_border_instances(mask: np.ndarray) -> np.ndarray:
+    """
+    Zero-out instances that touch the image border.
+
+    An instance is considered a border instance if any of its pixels lie on
+    the first or last row/column of the mask.
+
+    Args:
+        mask (np.ndarray): Instance mask of shape ``(H, W)`` or
+            ``(H, W, C)``.  When 3-dimensional, the first channel is
+            treated as the instance channel and all channels are zeroed
+            for border instances.
+
+    Returns:
+        np.ndarray: Mask with border instances set to 0.
+    """
+    if len(mask.shape) == 3:
+        instances = mask[..., 0]
+    else:
+        instances = mask
+    border_instances = np.unique(
+        np.concatenate(
+            [instances[0], instances[:, 0], instances[-1], instances[:, -1]]
+        )
+    )
+    border_instances = border_instances[border_instances != 0]
+    mask[np.isin(instances, border_instances)] = 0
+    return mask
+
+
 def compute_binary_pq_metrics(
     gt_masks: np.ndarray | list[np.ndarray],
     pred_masks: np.ndarray | list[np.ndarray],
     match_iou: float = 0.5,
+    no_border_instances: bool = False,
 ) -> pd.DataFrame:
     """
     Compute binary PQ metrics for a batch of masks. Expects both input
@@ -37,6 +106,9 @@ def compute_binary_pq_metrics(
         gt_masks (np.ndarray | list[np.ndarray]): Ground truth masks.
         pred_masks (np.ndarray | list[np.ndarray]): Predicted masks.
         match_iou (float, optional): IoU threshold for matching. Defaults to 0.5.
+        no_border_instances (bool, optional): Whether to remove border instances.
+            These are defined as instances which have any pixel on the border.
+            Defaults to False.
 
     Returns:
         pd.DataFrame: DataFrame with PQ metrics.
@@ -50,6 +122,10 @@ def compute_binary_pq_metrics(
     for i in tqdm(range(len(gt_masks)), desc="Computing metrics"):
         gt = gt_masks[i]
         pred = pred_masks[i]
+
+        if no_border_instances:
+            gt = remove_border_instances(gt)
+            pred = remove_border_instances(pred)
 
         # Ensure masks have proper instance IDs (contiguous)
         gt = remap_label(gt)
@@ -86,6 +162,7 @@ def compute_multiclass_pq_metrics(
     match_iou: float = 0.5,
     nr_classes: int = 6,
     n_workers: int = 0,
+    no_border_instances: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """
     Compute multi-class PQ metrics for a batch of masks. Expects both input
@@ -98,6 +175,9 @@ def compute_multiclass_pq_metrics(
         match_iou (float, optional): IoU threshold for matching. Defaults to 0.5.
         nr_classes (int, optional): Number of classes. Defaults to 6.
         n_workers (int, optional): Number of workers for parallel processing. Defaults to 0.
+        no_border_instances (bool, optional): Whether to remove border instances.
+            These are defined as instances which have any pixel on the border.
+            Defaults to False.
 
     Returns:
         pd.DataFrame: DataFrame with global PQ metrics per class.
@@ -115,7 +195,9 @@ def compute_multiclass_pq_metrics(
 
     per_image_results = []
 
-    pq_calculator = MulticlassPQCalculator(nr_classes, match_iou)
+    pq_calculator = MulticlassPQCalculator(
+        nr_classes, match_iou, no_border_instances
+    )
 
     inputs_for_pq_calculator = zip(gt_masks, pred_masks, range(len(gt_masks)))
 

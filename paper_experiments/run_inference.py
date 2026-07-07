@@ -38,6 +38,19 @@ CLASS_COLORS = {
 
 
 def apply_class_colormap(class_mask, colors_dict):
+    """
+    Apply a class-to-colour mapping to a 2-D class mask.
+
+    Args:
+        class_mask (np.ndarray): 2-D integer array of shape ``(H, W)``
+            where each pixel value is a class ID.
+        colors_dict (dict[int, list[float]]): Mapping from class ID to
+            an RGB colour triplet (values in ``[0, 1]``).
+
+    Returns:
+        np.ndarray: Float32 RGB image of shape ``(H, W, 3)``.
+    """
+
     h, w = class_mask.shape
     colored_mask = np.zeros((h, w, 3), dtype=np.float32)
     for class_id, color_val in colors_dict.items():
@@ -68,7 +81,20 @@ def load_labels(labels_path: str) -> np.ndarray:
     return labels
 
 
-def get_rescale_ratio(training_to_inference_mpp: str):
+def get_rescale_ratio(training_to_inference_mpp: str) -> float:
+    """
+    Parse a rescale specification and return the spatial ratio.
+
+    The specification can be either a single float (used directly) or two
+    colon-separated floats ``"training_mpp:inference_mpp"`` whose ratio is
+    returned.
+
+    Args:
+        training_to_inference_mpp (str): Rescale specification string.
+
+    Returns:
+        float: Spatial ratio to rescale images by.
+    """
     ratio = 1.0
     if ":" in training_to_inference_mpp:
         training_mpp, inference_mpp = training_to_inference_mpp.split(":")
@@ -151,7 +177,7 @@ def main(args):
         device=device,
         nclasses=n_classes,
         feature_transformation_structure=feature_transformation_structure,
-        bf16=args.bf16,
+        precision=args.precision,
     )
 
     if os.environ.get("COMPILE_MODEL", "") == "1":
@@ -225,10 +251,10 @@ def main(args):
         )
 
         if args.ignore_classes:
-            for i in args.ignore_classes:
-                for i in range(len(pred_for_pq)):
-                    gt_for_pq[i][..., 1][gt_for_pq[i][..., 1] == i] = 0
-                    pred_for_pq[i][..., 1][pred_for_pq[i][..., 1] == i] = 0
+            for cls in args.ignore_classes:
+                for j in range(len(pred_for_pq)):
+                    gt_for_pq[j][..., 1][gt_for_pq[j][..., 1] == cls] = 0
+                    pred_for_pq[j][..., 1][pred_for_pq[j][..., 1] == cls] = 0
 
         logger.info("Running metrics computation.")
         global_metrics, per_image_metrics = compute_multiclass_pq_metrics(
@@ -237,6 +263,7 @@ def main(args):
             match_iou=args.match_iou,
             nr_classes=n_classes - 1,
             n_workers=args.n_workers_metrics,
+            no_border_instances=args.no_border_instances,
         )
 
         if args.model_name is None:
@@ -291,10 +318,12 @@ if __name__ == "__main__":
         help="Path to the test dataset directory (must contain images.npy and optionally labels.npy).",
     )
     parser.add_argument(
-        "--bf16",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Triggers half precision inference.",
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["fp32", "fp16", "bf16"],
+        help="Inference precision. 'bf16' falls back to 'fp16' on GPUs without "
+        "hardware bf16 support.",
     )
     parser.add_argument(
         "--tta",
@@ -359,6 +388,12 @@ if __name__ == "__main__":
         help="Training to inference MPP ratio."
         "If a single number, it will be used to rescale inference images before prediction."
         "If two colon-separated numbers are provided (i.e. 0.25:0.5), their ratio will be used.",
+    )
+    parser.add_argument(
+        "--no_border_instances",
+        action="store_true",
+        default=False,
+        help="Whether to remove border instances during metrics computation.",
     )
 
     args = parser.parse_args()

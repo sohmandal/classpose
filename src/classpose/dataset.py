@@ -1,269 +1,671 @@
-from multiprocessing import Event, Process, Queue
-from queue import Empty
-from typing import Any
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any, Iterator
 
 import numpy as np
+import h5py
 from cellpose.transforms import normalize_img, random_rotate_and_resize
+from torch.utils.data import Dataset, Sampler
 
-from classpose.log import get_logger
 from classpose.transforms import create_stardist_augmentation, get_config
+from classpose.log import get_logger
 
-dataset_logger = get_logger(__name__)
+logger = get_logger(__name__)
 
 
-class ClassposeDataset:
+def _build_augment_pipeline(augment_pipeline_config: str | None):
+    if augment_pipeline_config is None:
+        return None
+    return create_stardist_augmentation(get_config(augment_pipeline_config))
+
+
+def augment_single_image(
+    imgs: np.ndarray,
+    lbls: np.ndarray,
+    diams: float,
+    diam_mean: float,
+    rescale: bool,
+    scale_range: float | list[float] | None,
+    bsize: int,
+    normalize_params: dict[str, Any],
+    augment: bool,
+    augment_pipeline: Any,
+) -> tuple[np.ndarray, np.ndarray]:
+    rsc = np.array(
+        [diams / diam_mean if rescale else 1.0],
+        dtype=np.float32,
+    )
+    if augment:
+        if augment_pipeline is not None:
+            imgs = augment_pipeline.transform(imgs)
+        imgi, lbl = random_rotate_and_resize(
+            [imgs],
+            Y=[lbls],
+            rescale=rsc,
+            scale_range=scale_range,
+            xy=(bsize, bsize),
+        )[:2]
+        image = imgi[0]
+        label = lbl[0]
+    else:
+        image = imgs
+        label = lbls
+
+    image = normalize_img(image, **normalize_params)
+    return np.ascontiguousarray(image), np.ascontiguousarray(label)
+
+
+class ClassposeDataset(Dataset):
+    """
+    Base class for Classpose datasets containing shared configuration and methods.
+    """
+
     def __init__(
         self,
-        data_array: np.ndarray,
-        label_array: np.ndarray,
-        diameter_array: np.ndarray,
-        n_proc: int = 1,
-        batch_size: int = 2,
-        augment_pipeline_config: str | None = None,
-        diam_mean: float = 100,
+        augmentation_strategy: str | None = None,
+        diam_mean: float = 30.0,
         rescale: bool = True,
-        scale_range: list[float] | None = None,
-        bsize: int = 128,
-        normalize_params: dict[str, Any] = {"normalize": True},
+        scale_range: float | list[float] | None = 0.5,
+        bsize: int = 256,
+        normalize_params: dict[str, Any] | None = None,
         augment: bool = True,
     ):
-        self.data_array = data_array
-        self.label_array = label_array
-        self.diameter_array = diameter_array
-        self.n_proc = n_proc
-        self.batch_size = batch_size
-        self.augment_pipeline_config = augment_pipeline_config
+        """Initialize the base dataset configuration.
+
+        Args:
+            augmentation_strategy (str | None): Configuration string for the augmentation pipeline.
+            diam_mean (float): Mean diameter of the objects, used for scaling.
+            rescale (bool): Whether to rescale images based on object diameters.
+            scale_range (float | list[float] | None): Range for random scaling during augmentation.
+            bsize (int): Crop size for training.
+            normalize_params (dict[str, Any] | None): Parameters for image normalization.
+            augment (bool): Whether to apply any augmentations.
+        """
+        self.augmentation_strategy = augmentation_strategy
         self.diam_mean = diam_mean
         self.rescale = rescale
         self.scale_range = scale_range
         self.bsize = bsize
-        self.normalize_params = normalize_params
+        self.normalize_params = (
+            normalize_params
+            if normalize_params is not None
+            else {"normalize": True}
+        )
         self.augment = augment
+        self.diameter_array = None
+        self._augment_pipeline = None
+        self._class_weights = None
+        self._instance_counts = None
+        self._class_counts = None
+        self._is_subset = False
 
-        assert self.n_proc >= 0, "n_proc must be greater than or equal to 0"
-        assert self.batch_size > 0, "batch_size must be greater than 0"
+        self.length = 0
+        self.indices = np.array([], dtype=np.int32)
 
-        if self.n_proc > 0:
-            self.start_workers()
-        else:
-            self.start_lists()
-
-    def reset_queue(self, queue: Queue):
+    def __len__(self) -> int:
         """
-        Resets a queue.
-
-        Args:
-            queue (Queue): Queue to reset.
-        """
-        if self.n_proc > 0:
-            try:
-                while True:
-                    queue.get_nowait()
-            except Empty:
-                pass
-        else:
-            self.idxs = []
-
-    def start_lists(self):
-        """
-        Initialises an index list when n_proc == 0.
-        """
-        self.idxs = []
-
-    def start_workers(self):
-        """
-        Starts the workers when n_proc > 0.
-        """
-        pre_q = Queue()
-        q = Queue(maxsize=self.n_proc)
-        q_out = Queue()
-        stop_event = Event()
-        processes = []
-        for _ in range(self.n_proc):
-            p = Process(
-                target=self.work,
-                args=(q, q_out),
-                name=f"dataset_worker_{_}",
-            )
-            p.daemon = True
-            p.start()
-            processes.append(p)
-
-        # pre_q ensures that all items are added at the beginning of
-        # each epoch and then processed sequentially by the worker
-        # taking elements from q
-        self.queue_process = Process(target=self.put_worker, args=(pre_q, q))
-        self.queue_process.start()
-
-        self.pre_q = pre_q
-        self.q = q
-        self.q_out = q_out
-        self.stop_event = stop_event
-        self.processes = processes
-
-    def augment_image(
-        self,
-        imgs: np.ndarray,
-        lbls: np.ndarray,
-        diams: np.ndarray,
-        diam_mean: float,
-        rescale: bool,
-        scale_range: list[float] | None,
-        bsize: int,
-        normalize_params: dict[str, Any],
-        augment: bool,
-        augment_pipeline: Any,
-    ):
-        """
-        Augments images and labels.
-
-        Args:
-            imgs (np.ndarray): Images to augment.
-            lbls (np.ndarray): Labels to augment.
-            diams (np.ndarray): Diameters of the images.
-            diam_mean (float): Mean diameter of the images.
-            rescale (bool): Whether to rescale the images.
-            scale_range (list[float] | None): Range of scales to use for rescaling
-                augmentation.
-            bsize (int): Batch size.
-            normalize_params (dict[str, Any]): Parameters for normalization.
-            augment (bool): Whether to augment the images.
-            augment_pipeline (Any): Augmentation pipeline.
+        Get the number of items in the dataset.
 
         Returns:
-            tuple[np.ndarray, np.ndarray]: Augmented images and labels.
+            int: The number of items in the dataset.
         """
-        rsc = diams / diam_mean if rescale else np.ones(diams.shape, "float32")
-        # augmentations
-        if augment:
-            if augment_pipeline is not None:
-                imgs = augment_pipeline.transform(imgs)
-            imgi, lbl = random_rotate_and_resize(
-                [imgs],
-                Y=[lbls],
-                rescale=[rsc],
-                scale_range=scale_range,
-                xy=(bsize, bsize),
-            )[:2]
-        else:
-            imgi = imgs
-            lbl = lbls
-        imgi = normalize_img(imgi, **normalize_params)
-        return imgi, lbl
+        return self.length
 
-    def work(self, q: Queue, q_out: Queue):
+    def _get_augment_pipeline(self):
         """
-        Worker responsible for processing the queue.
+        Build and cache the augmentation pipeline if required.
+
+        Returns:
+            Callable | None: The augmentation pipeline or None if no augmentation is configured.
+        """
+        if not self.augment or self.augmentation_strategy is None:
+            return None
+        if self._augment_pipeline is None:
+            self._augment_pipeline = _build_augment_pipeline(
+                self.augmentation_strategy
+            )
+        return self._augment_pipeline
+
+    def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Get a single item from the dataset. Must be implemented by subclasses.
 
         Args:
-            q (Queue): Queue to process.
-            q_out (Queue): Queue to output results to.
+            idx (int): The index of the item to retrieve.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The image and label at the specified index.
         """
-        augment_pipeline = create_stardist_augmentation(
-            get_config(self.augment_pipeline_config)
+        raise NotImplementedError
+
+    def subset(self, indices: list[int] | np.ndarray) -> "ClassposeDataset":
+        """
+        Create a subset of the dataset using the given indices.
+
+        Args:
+            indices (list[int] | np.ndarray): The indices to include in the new
+                subset.
+
+        Returns:
+            ClassposeDataset: A copy of the dataset containing only the
+                specified indices.
+        """
+        indices = sorted(indices)
+        dataset_copy = deepcopy(self)
+        dataset_copy.indices = dataset_copy.indices[indices]
+        dataset_copy.length = len(indices)
+        dataset_copy._instance_counts = None
+        dataset_copy._class_counts = None
+        dataset_copy._class_weights = None
+        dataset_copy._is_subset = True
+        return dataset_copy
+
+    def initialise_diameter_array_if_necessary(self):
+        if self.diameter_array is None:
+            self.diameter_array = np.ones(self.length) * self.diam_mean
+
+    @property
+    def instance_counts(self):
+        """
+        Lazy loading of instance counts.
+
+        Returns:
+            np.ndarray: The instance counts.
+        """
+        if self._instance_counts is None:
+            from classpose.train_utils import get_instance_counts
+
+            self._instance_counts = get_instance_counts(self.labels)
+        return self._instance_counts
+
+    @property
+    def class_counts(self) -> np.ndarray:
+        """
+        Lazy loading of class counts.
+
+        Returns:
+            np.ndarray: The class counts.
+        """
+        if self._class_counts is None:
+            from classpose.train_utils import get_class_counts
+
+            self._class_counts = get_class_counts(self.labels, self.n_classes)
+        if np.any(self._class_counts == 0):
+            logger.warning("Some classes have zero instances in the dataset")
+            logger.warning("Class counts: %s", self._class_counts)
+        return self._class_counts
+
+    @property
+    def class_weights(self):
+        """
+        Lazy loading of class weights.
+
+        Returns:
+            np.ndarray: The class weights.
+        """
+        if self._class_weights is None:
+            from classpose.train_utils import get_class_weights
+
+            self._class_weights = get_class_weights(self.class_counts)
+        return self._class_weights
+
+
+class ClassposeTrainingDataset(ClassposeDataset):
+    """
+    In-memory dataset for Classpose training.
+
+    Expects the following array shapes:
+    - data_array: (N, C, H, W) where N is the number of images, C is the
+        number of channels, H and W are the height and width of the images
+    - label_array: (N, 5, H, W) where N is the number of images, 5 is the
+        number of channels (instance, cell type/class, binary mask, flow_y, flow_x),
+        H and W are the height and width of the images
+    """
+
+    def __init__(
+        self,
+        data_array: np.ndarray,
+        label_array: np.ndarray,
+        diameter_array: np.ndarray | None = None,
+        augment_pipeline_config: str | None = None,
+        diam_mean: float = 30.0,
+        rescale: bool = True,
+        scale_range: float | list[float] | None = 0.5,
+        bsize: int = 256,
+        normalize_params: dict[str, Any] | None = None,
+        augment: bool = True,
+    ):
+        """
+        Initialize the training dataset from in-memory arrays.
+
+        Args:
+            data_array (np.ndarray): Array of input images.
+            label_array (np.ndarray): Array of ground truth labels.
+            diameter_array (np.ndarray): Array of object diameters for each image.
+            augment_pipeline_config (str | None): Configuration string for the augmentation pipeline.
+            diam_mean (float): Mean diameter of the objects, used for scaling.
+            rescale (bool): Whether to rescale images based on object diameters.
+            scale_range (float | list[float] | None): Range for random scaling during augmentation.
+            bsize (int): Crop size for training.
+            normalize_params (dict[str, Any] | None): Parameters for image normalization.
+            augment (bool): Whether to apply any augmentations.
+        """
+        super().__init__(
+            augmentation_strategy=augment_pipeline_config,
+            diam_mean=diam_mean,
+            rescale=rescale,
+            scale_range=scale_range,
+            bsize=bsize,
+            normalize_params=normalize_params,
+            augment=augment,
         )
-        while True:
-            idx = q.get()
-            if idx is None:
-                break
-            q_out.put(
-                self.augment_image(
-                    self.data_array[idx],
-                    self.label_array[idx][1:],
-                    self.diameter_array[idx],
-                    diam_mean=self.diam_mean,
-                    rescale=self.rescale,
-                    scale_range=self.scale_range,
-                    bsize=self.bsize,
-                    normalize_params=self.normalize_params,
-                    augment=self.augment,
-                    augment_pipeline=augment_pipeline,
+        self.data_array = data_array
+        self.label_array = label_array
+        self.diameter_array = diameter_array
+        self.length = len(self.data_array)
+        self.indices = np.arange(0, self.length, dtype=np.uint32)
+
+        self.n_classes = int(
+            max([np.max(lbl[1]) for lbl in self.label_array]) + 1
+        )
+        self.initialise_diameter_array_if_necessary()
+
+    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Get an augmented image and label pair at the specified index.
+
+        Args:
+            index (int): The index of the item to retrieve.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The augmented image and label at the specified index.
+        """
+        idx = self.indices[index]
+        return augment_single_image(
+            self.data_array[idx],
+            self.label_array[idx][1:],
+            float(self.diameter_array[idx]),
+            diam_mean=self.diam_mean,
+            rescale=self.rescale,
+            scale_range=self.scale_range,
+            bsize=self.bsize,
+            normalize_params=self.normalize_params,
+            augment=self.augment,
+            augment_pipeline=self._get_augment_pipeline(),
+        )
+
+    @property
+    def images(self) -> np.ndarray:
+        """
+        Get all images in the dataset.
+        """
+        return self.data_array[self.indices]
+
+    @property
+    def labels(self) -> list[np.ndarray]:
+        """
+        Get all labels in the dataset, omitting extra channels if present.
+        """
+        return [self.label_array[i][:2].astype(np.int16) for i in self.indices]
+
+
+class ClassposeHDF5Dataset(ClassposeDataset):
+    """
+    HDF5-backed dataset for Classpose.
+    Suitable for large datasets that don't fit in memory.
+
+    Expects an HDF5 file with two datasets:
+    - images: (N, C, H, W) where N is the number of images, C is the
+        number of channels, H and W are the height and width of the images
+    - labels: (N, 5, H, W) where N is the number of images, 5 is the
+        number of channels (instance, cell type/class, binary mask, flow_y, flow_x),
+        H and W are the height and width of the images
+    - class_counts (optional): (C,) where C is the number of classes
+    - instance_counts (optional): (N, C) where N is the number of images and C
+        is the number of cells belonging to each class in each image
+    """
+
+    def __init__(
+        self,
+        hdf5_path: str,
+        diameter_array: np.ndarray | None = None,
+        augmentation_strategy: str | None = None,
+        diam_mean: float = 30.0,
+        rescale: bool = False,
+        scale_range: float | list[float] | None = 0.5,
+        bsize: int = 256,
+        normalize_params: dict[str, Any] | None = None,
+        augment: bool = True,
+        keep_open: bool = False,
+    ):
+        """Initialize the HDF5 dataset.
+
+        Args:
+            hdf5_path (str): Path to the HDF5 file containing 'images' and 'labels' datasets.
+            diameter_array (np.ndarray | None): Array of object diameters. If None, defaults to diam_mean.
+            augmentation_strategy (str | None): Configuration string for the augmentation pipeline.
+            diam_mean (float): Mean diameter of the objects, used for scaling.
+            rescale (bool): Whether to rescale images based on object diameters.
+            scale_range (float | list[float] | None): Range for random scaling during augmentation.
+            bsize (int): Crop size for training.
+            normalize_params (dict[str, Any] | None): Parameters for image normalization.
+            augment (bool): Whether to apply any augmentations.
+            keep_open (bool): Whether to keep the HDF5 file handle open (may cause issues with multiprocessing).
+        """
+        super().__init__(
+            augmentation_strategy=augmentation_strategy,
+            diam_mean=diam_mean,
+            rescale=rescale,
+            scale_range=scale_range,
+            bsize=bsize,
+            normalize_params=normalize_params,
+            augment=augment,
+        )
+        self.hdf5_path = hdf5_path
+        self.diameter_array = diameter_array
+        self.keep_open = keep_open
+        self._hdf5_file = None
+
+        self.length = self._get_length()
+        self.indices = np.arange(self.length, dtype=np.int32)
+        self._n_classes = None
+        self.initialise_diameter_array_if_necessary()
+
+    @property
+    def hdf5_file(self) -> h5py.File:
+        """
+        Get the HDF5 file handle, keeping it open if configured to do so.
+
+        Returns:
+            h5py.File: The HDF5 file handle.
+        """
+        if self.keep_open:
+            if self._hdf5_file is None:
+                self._hdf5_file = h5py.File(self.hdf5_path, "r")
+            return self._hdf5_file
+        else:
+            return h5py.File(self.hdf5_path, "r")
+
+    def _get_length(self) -> int:
+        """
+        Get the total number of images in the HDF5 file.
+
+        Returns:
+            int: The number of images in the dataset.
+        """
+        if self.keep_open:
+            return len(self.hdf5_file["images"])
+        else:
+            with h5py.File(self.hdf5_path, "r") as f:
+                return len(f["images"])
+
+    def _get_item(
+        self, i: int | list[int] | slice
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Fetch items from the HDF5 file by index or slice.
+
+        Args:
+            i (int | list[int] | slice): The index or slice to fetch.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The fetched images and labels.
+        """
+        if isinstance(i, slice):
+            i = [idx for idx in range(i.start, i.stop, i.step or 1)]
+
+        if self.keep_open:
+            f = self.hdf5_file
+            if isinstance(i, (list, np.ndarray)):
+                images = np.stack([f["images"][idx] for idx in i])
+                labels = np.stack([f["labels"][idx] for idx in i])
+            else:
+                images = f["images"][i]
+                labels = f["labels"][i]
+            return images, labels
+        else:
+            with h5py.File(self.hdf5_path, "r") as f:
+                if isinstance(i, (list, np.ndarray)):
+                    images = np.stack([f["images"][idx] for idx in i])
+                    labels = np.stack([f["labels"][idx] for idx in i])
+                else:
+                    images = f["images"][i]
+                    labels = f["labels"][i]
+                return images, labels
+
+    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Get an augmented image and label pair at the specified index.
+
+        Args:
+            index (int): The index of the item to retrieve.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The augmented image and label pair.
+        """
+        idx = self.indices[index]
+        img, lbl = self._get_item(idx)
+
+        return augment_single_image(
+            img,
+            lbl[1:],
+            float(self.diameter_array[idx]),
+            diam_mean=self.diam_mean,
+            rescale=self.rescale,
+            scale_range=self.scale_range,
+            bsize=self.bsize,
+            normalize_params=self.normalize_params,
+            augment=self.augment,
+            augment_pipeline=self._get_augment_pipeline(),
+        )
+
+    @property
+    def images(self) -> list[np.ndarray]:
+        """
+        Get all images in the dataset. Note: this loads everything into memory.
+
+        Returns:
+            list[np.ndarray]: list with images.
+        """
+        return [self._get_item(i)[0] for i in self.indices]
+
+    @property
+    def labels(self) -> list[np.ndarray]:
+        """
+        Get all labels in the dataset, omitting extra channels if present.
+
+        Returns:
+            list[np.ndarray]: list with labels.
+        """
+        return [self._get_item(i)[1][:2].astype(np.int16) for i in self.indices]
+
+    @property
+    def class_counts(self) -> np.ndarray:
+        """
+        Lazy loading of class counts.
+
+        Returns:
+            np.ndarray: Array of class counts.
+        """
+        if self._class_counts is None:
+            with h5py.File(self.hdf5_path) as f:
+                if "class_counts" in f and self._is_subset is False:
+                    self._class_counts = f["class_counts"][:]
+                else:
+                    self._class_counts = super().class_counts
+        if np.any(self._class_counts == 0):
+            logger.warning("Some classes have zero instances in the dataset")
+            logger.warning("Class counts: %s", self._class_counts)
+        return self._class_counts
+
+    @property
+    def instance_counts(self) -> np.ndarray:
+        """
+        Lazy loading for instance counts.
+
+        Returns:
+            np.ndarray: Array of instance counts.
+        """
+        if self._instance_counts is None:
+            with h5py.File(self.hdf5_path) as f:
+                if "instance_counts" in f:
+                    self._instance_counts = f["instance_counts"][self.indices]
+                else:
+                    self._instance_counts = super().instance_counts
+        return self._instance_counts
+
+    @property
+    def n_classes(self) -> int:
+        """
+        Get the number of classes present in the labels.
+
+        Returns:
+            int: The number of classes.
+        """
+        if self._n_classes is None:
+            with h5py.File(self.hdf5_path) as f:
+                if "class_counts" in f:
+                    self._n_classes = f["class_counts"].shape[0]
+                else:
+                    self._n_classes = int(
+                        max([lbl[1].max() for lbl in self.labels]) + 1
+                    )
+        return self._n_classes
+
+
+class DistributedEpochSampler(Sampler[int]):
+    def __init__(
+        self,
+        dataset_length: int,
+        batch_size: int,
+        train_probs: np.ndarray | None = None,
+        nimg_per_epoch: int | None = None,
+        rank: int = 0,
+        num_replicas: int = 1,
+        seed: int = 0,
+    ):
+        if dataset_length <= 0:
+            raise ValueError("dataset_length must be positive")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if num_replicas <= 0:
+            raise ValueError("num_replicas must be positive")
+        if rank < 0 or rank >= num_replicas:
+            raise ValueError("rank must be in [0, num_replicas)")
+
+        self.dataset_length = dataset_length
+        self.batch_size = batch_size
+        self.train_probs = None
+        if train_probs is not None:
+            train_probs = np.asarray(train_probs, dtype=np.float64)
+            if train_probs.shape[0] != dataset_length:
+                raise ValueError(
+                    "train_probs must have the same length as the dataset"
                 )
+            if np.any(train_probs < 0):
+                raise ValueError("train_probs must be non-negative")
+            if float(train_probs.sum()) <= 0.0:
+                raise ValueError("train_probs must sum to a positive value")
+            self.train_probs = train_probs / train_probs.sum()
+
+        self.nimg_per_epoch = (
+            dataset_length if nimg_per_epoch is None else int(nimg_per_epoch)
+        )
+        if self.nimg_per_epoch <= 0:
+            raise ValueError("nimg_per_epoch must be positive")
+        if self.train_probs is None and self.nimg_per_epoch > dataset_length:
+            raise ValueError(
+                "nimg_per_epoch cannot exceed the dataset size without oversampling"
             )
 
-    def put(self, idx: int | list[int], reset_queues: bool = False):
-        """
-        Adds indices to the queue.
+        self.rank = rank
+        self.num_replicas = num_replicas
+        self.seed = seed
+        self.epoch = 0
+        self.global_batch_size = self.num_replicas * self.batch_size
+        self._local_num_samples = self._compute_local_num_samples()
 
-        Args:
-            idx (int | list[int]): Index or list of indices to add.
-            reset_queues (bool, optional): Whether to reset the pre-queue.
-                Defaults to False.
-        """
-        if reset_queues:
-            self.reset_queue(self.pre_q)
-        if isinstance(idx, int):
-            idx = [idx]
-        if self.n_proc > 0:
-            # starts a process that sequentially adds items to queue
-            # this guarantees that the queue is filled in order
-            for i in idx:
-                self.pre_q.put(i)
+    def _build_global_indices(self, epoch: int | None = None) -> np.ndarray:
+        epoch = self.epoch if epoch is None else epoch
+        rng = np.random.default_rng(self.seed + epoch)
+        all_indices = np.arange(self.dataset_length, dtype=np.int64)
+
+        if self.train_probs is None:
+            global_indices = rng.permutation(all_indices)[: self.nimg_per_epoch]
         else:
-            self.idxs.extend(idx)
+            global_indices = rng.choice(
+                all_indices,
+                size=self.nimg_per_epoch,
+                p=self.train_probs,
+            )
 
-    def put_worker(self, pre_q: Queue, q: Queue):
-        """
-        Worker responsible for adding to main queue.
-        """
-        while True:
-            idx = pre_q.get()
-            if idx is None:
-                break
-            q.put(idx)
+        usable_size = global_indices.shape[0] - (
+            global_indices.shape[0] % self.global_batch_size
+        )
+        if usable_size == 0:
+            raise ValueError(
+                "The epoch does not contain enough samples for even one full "
+                f"distributed batch. Lower batch_size ({self.batch_size}), lower "
+                f"world_size ({self.num_replicas}), or increase nimg_per_epoch "
+                f"({self.nimg_per_epoch})."
+            )
 
-    def get(self):
-        """
-        Returns a batch from the dataset.
-        """
-        batch, batch_labels = [], []
-        if self.n_proc > 0:
-            for _ in range(self.batch_size):
-                img, lbl = self.q_out.get()
-                batch.append(img)
-                batch_labels.append(lbl)
-        else:
-            for _ in range(self.batch_size):
-                idx = self.idxs.pop(0)
-                img, lbl = self.augment_image(
-                    self.data_array[idx],
-                    self.label_array[idx][1:],
-                    self.diameter_array[idx],
-                    diam_mean=self.diam_mean,
-                    rescale=self.rescale,
-                    scale_range=self.scale_range,
-                    bsize=self.bsize,
-                    normalize_params=self.normalize_params,
-                    augment=self.augment,
-                    augment_pipeline=None,
-                )
-                batch.append(img)
-                batch_labels.append(lbl)
-        return np.concatenate(batch), np.concatenate(batch_labels)
+        return np.asarray(global_indices[:usable_size], dtype=np.int64)
 
-    def shutdown(self):
-        """
-        Shuts down processes if `n_proc` > 0.
-        """
-        if self.n_proc > 0:
-            self.reset_queue(self.pre_q)
-            self.reset_queue(self.q)
-            self.reset_queue(self.q_out)
+    def _compute_local_num_samples(self) -> int:
+        return self._build_local_indices(epoch=0).shape[0]
 
-            self.pre_q.put(None)
+    def _build_local_indices(self, epoch: int | None = None) -> np.ndarray:
+        global_indices = self._build_global_indices(epoch=epoch)
+        reshaped = global_indices.reshape(
+            -1, self.num_replicas, self.batch_size
+        )
+        return reshaped[:, self.rank, :].reshape(-1)
 
-            for p in self.processes:
-                self.q.put(None)
-                dataset_logger.info(f"Shutting down dataset worker {p.name}")
-                p.terminate()
-                dataset_logger.info(f"Shut down dataset worker {p.name}")
-                p.join()
-            dataset_logger.info("Shut down dataset workers")
-            self.queue_process.terminate()
-            self.queue_process.join()
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
 
-    def __del__(self):
-        try:
-            self.shutdown()
-        except Exception:
-            pass
+    def local_indices(self, epoch: int | None = None) -> np.ndarray:
+        return self._build_local_indices(epoch=epoch)
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self._build_local_indices().tolist())
+
+    def __len__(self) -> int:
+        return self._local_num_samples
+
+
+class SequentialDistributedSampler(Sampler[int]):
+    def __init__(
+        self,
+        dataset_length: int,
+        rank: int = 0,
+        num_replicas: int = 1,
+    ):
+        if dataset_length < 0:
+            raise ValueError("dataset_length must be non-negative")
+        if num_replicas <= 0:
+            raise ValueError("num_replicas must be positive")
+        if rank < 0 or rank >= num_replicas:
+            raise ValueError("rank must be in [0, num_replicas)")
+
+        self.dataset_length = dataset_length
+        self.rank = rank
+        self.num_replicas = num_replicas
+
+        base = dataset_length // num_replicas
+        remainder = dataset_length % num_replicas
+        self.start_index = rank * base + min(rank, remainder)
+        self.end_index = (
+            self.start_index + base + (1 if rank < remainder else 0)
+        )
+
+    def indices(self) -> list[int]:
+        return list(range(self.start_index, self.end_index))
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self.indices())
+
+    def __len__(self) -> int:
+        return self.end_index - self.start_index

@@ -39,13 +39,18 @@ warnings.filterwarnings("ignore", message=".*Transforming to str index.*")
 
 import os
 import argparse
+import gc
 import json
 import logging
+import queue
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
 from multiprocessing.managers import SyncManager
+from multiprocessing import Event
+from multiprocessing.synchronize import Event as EventType
 
 import cv2
 import numpy as np
@@ -53,7 +58,7 @@ import shapely
 import torch
 import torch.multiprocessing as tmproc
 from matplotlib import colormaps
-from openslide import OpenSlide
+from scipy import ndimage
 from scipy.spatial import KDTree
 from skimage import color, measure
 from tqdm import tqdm
@@ -88,7 +93,34 @@ DEFAULT_TILE_SIZE = 1024
 DEFAULT_OVERLAP = 64
 MAX_QUEUE_SIZE = 2048
 MIN_TILE_SIZE = 256
+DEFAULT_INFERENCE_THREADS_GPU = 2
+DEFAULT_INFERENCE_THREADS_CPU_MPS = 1
+DEFAULT_PROCS_PER_GPU = 1
 COLORMAP = [[int(y * 255) for y in x] for x in colormaps["Set3"].colors]
+
+
+def resize_tile_to_target_mpp(
+    tile: np.ndarray, resize_factor: float
+) -> np.ndarray:
+    """
+    Resize a tile so that its apparent MPP matches the model MPP.
+
+    Args:
+        tile (np.ndarray): Tile read from the selected pyramid level.
+        resize_factor (float): Resize factor.
+
+    Returns:
+        np.ndarray: Resized tile.
+    """
+    if resize_factor == 1.0:
+        return tile
+    new_width = max(1, int(round(tile.shape[1] * resize_factor)))
+    new_height = max(1, int(round(tile.shape[0] * resize_factor)))
+    return cv2.resize(
+        tile,
+        (new_width, new_height),
+        interpolation=cv2.INTER_LINEAR,
+    )
 
 
 class SlideLoader:
@@ -108,6 +140,7 @@ class SlideLoader:
         min_area: int = 0,
         roi_tree: shapely.STRtree | None = None,
         device: str | None = None,
+        termination_event: EventType | None = None,
     ):
         """
         Args:
@@ -127,6 +160,8 @@ class SlideLoader:
             roi_tree (shapely.STRtree, optional): STRtree of the ROI polygons.
                 Defaults to None.
             device (str, optional): Device to use for inference. Defaults to None.
+            termination_event (Event, optional): Event to signal termination.
+                Defaults to None.
         """
         self.slide_path = slide_path
         self.tile_size = tile_size
@@ -137,6 +172,7 @@ class SlideLoader:
         self.min_area = min_area
         self.roi_tree = roi_tree
         self.device = device
+        self.termination_event = termination_event
 
         self.downloaded_slide = None
 
@@ -144,7 +180,7 @@ class SlideLoader:
             manager = tmproc.Manager()
 
         self.n = manager.Value("i", 0)
-        self.q = manager.Queue(maxsize=MAX_QUEUE_SIZE)
+        self.q = tmproc.Queue(maxsize=MAX_QUEUE_SIZE)
         self.ts = manager.Value("f", 0)
         self.mpp_x = manager.Value("f", 0)
         self.mpp_y = manager.Value("f", 0)
@@ -152,6 +188,7 @@ class SlideLoader:
         self.bounds_y = manager.Value("f", 0)
         self.tissue_cnts = manager.list()
         self.roi_cnts = manager.list()
+        self.resize_factor = manager.Value("f", 1.0)
 
         self.p = tmproc.Process(target=self.fill_queue)
         self.p.start()
@@ -198,32 +235,47 @@ class SlideLoader:
         ):
             self._align_roi_tree_to_slide_bounds()
 
-        target_downsample = min(
+        prediction_to_slide_scale = min(
             self.train_mpp / self.mpp[0], self.train_mpp / self.mpp[1]
         )
-        self.level = self.slide.get_best_level_for_downsample(target_downsample)
+        self.level = self.slide.get_best_level_for_downsample(
+            prediction_to_slide_scale
+        )
         self.slide_dim = self.slide.level_dimensions[self.level]
         self.ts.value = self.slide.level_downsamples[self.level]
+        self.resize_factor.value = self.ts.value / prediction_to_slide_scale
+        read_tile_size = max(
+            1, round(self.tile_size / self.resize_factor.value)
+        )
+        read_overlap = max(0, round(self.overlap / self.resize_factor.value))
         if self.roi_tree is not None:
             self.coords = list(
                 self._get_coords_roi(
-                    self.tile_size, self.overlap, self.slide_dim, self.ts.value
+                    read_tile_size, read_overlap, self.slide_dim, self.ts.value
                 )
             )
         else:
             self.coords = list(
                 self._get_coords(
-                    self.tile_size, self.overlap, self.slide_dim, self.ts.value
+                    read_tile_size, read_overlap, self.slide_dim, self.ts.value
                 )
             )
-        logger.info(f"Slide mpp: {self.mpp}")
+        logger.info(f"Slide MPP: {self.mpp}")
+        logger.info(f"Model MPP: {self.train_mpp}")
         logger.info(f"Number of tiles: {len(self.coords)}")
         logger.info(f"Slide dimensions: {self.slide_dim}")
         logger.info(f"Tile size: {self.tile_size}")
         logger.info(f"Overlap: {self.overlap}")
-        logger.info(f"Target downsample: {target_downsample}")
-        logger.info(f"Slide downsample: {self.ts.value}")
-        logger.info(f"Level: {self.level}")
+        logger.info(
+            "Prediction-to-slide scale from MPP: %s",
+            prediction_to_slide_scale,
+        )
+        logger.info(f"Selected level: {self.level}")
+        logger.info(f"Selected level downsample: {self.ts.value}")
+        logger.info(
+            "Residual resize factor before inference: %s",
+            self.ts.value / prediction_to_slide_scale,
+        )
 
     def _align_roi_tree_to_slide_bounds(self):
         """
@@ -261,7 +313,7 @@ class SlideLoader:
             )
             self.tissue_cnts.extend(
                 [
-                    shapely.Polygon(cnt["contour"], cnt["holes"])
+                    make_valid(shapely.Polygon(cnt["contour"], cnt["holes"]))
                     for cnt in tissue_cnts.values()
                 ]
             )
@@ -283,7 +335,7 @@ class SlideLoader:
             tile_size (int): Size of the tiles.
             overlap (int): Overlap between tiles.
             slide_dim (tuple[int, int]): Dimensions of the slide.
-            ts (float): Target downsample.
+            ts (float): Selected level downsample.
 
         Yields:
             tuple[int, int]: Tuple of coordinates (x, y).
@@ -325,7 +377,7 @@ class SlideLoader:
             tile_size (int): Size of the tiles.
             overlap (int): Overlap between tiles.
             slide_dim (tuple[int, int]): Dimensions of the slide.
-            ts (float): Target downsample.
+            ts (float): Selected level downsample.
 
         Yields:
             tuple[int, int]: Tuple of coordinates (x, y).
@@ -339,7 +391,7 @@ class SlideLoader:
                 yield ((int(i * ts), int(j * ts)), tile_size)
 
     def _point_to_square_polygon(
-        self, point: tuple[int, int], tile_size: int
+        self, point: tuple[int, int], tile_size: int | float
     ) -> shapely.Polygon:
         return shapely.Polygon(
             [
@@ -350,6 +402,19 @@ class SlideLoader:
                 (point[0], point[1]),
             ]
         )
+
+    def _check_tile_in_cnts(
+        self,
+        coords: tuple[int, int],
+        tile_size: int,
+        cnts: list[shapely.Geometry],
+    ):
+        tile_size_level0 = tile_size * float(self.ts.value)
+        tile = self._point_to_square_polygon(coords, tile_size_level0)
+        has_roi = any([cnt.intersects(tile) for cnt in cnts])
+        if not has_roi:
+            return False
+        return True
 
     def fill_queue(self):
         """
@@ -369,18 +434,14 @@ class SlideLoader:
         with tqdm(self.coords, desc="Tiles to predict: 0", position=0) as pbar:
             for coords, tile_size in pbar:
                 if self.tissue_cnts:
-                    tile = self._point_to_square_polygon(coords, tile_size)
-                    has_tissue = any(
-                        [cnt.intersects(tile) for cnt in self.tissue_cnts]
-                    )
-                    if not has_tissue:
+                    if not self._check_tile_in_cnts(
+                        coords, tile_size, self.tissue_cnts
+                    ):
                         continue
                 if self.roi_cnts:
-                    tile = self._point_to_square_polygon(coords, tile_size)
-                    has_roi = any(
-                        [cnt.intersects(tile) for cnt in self.roi_cnts]
-                    )
-                    if not has_roi:
+                    if not self._check_tile_in_cnts(
+                        coords, tile_size, self.roi_cnts
+                    ):
                         continue
                 tile = self.slide.read_region(
                     coords, self.level, (tile_size, tile_size)
@@ -389,12 +450,36 @@ class SlideLoader:
                 if tile_array.shape[-1] == 4:
                     tile_array = tile_array[:, :, :3]
 
+                tile_array = self._resize_tile_to_target_mpp(tile_array)
                 self.q.put((tile_array, coords))
                 n += 1
                 self.n.value += 1
                 pbar.set_description(f"Tiles to predict: {n}")
         for _ in range(self.n_none):
             self.q.put((None, None))
+        if self.termination_event is not None:
+            self.termination_event.wait()
+
+    def _resize_tile_to_target_mpp(self, tile: np.ndarray) -> np.ndarray:
+        """
+        Resize a tile so that its apparent MPP matches the model MPP.
+
+        Args:
+            tile (np.ndarray): Tile read from the selected pyramid level.
+
+        Returns:
+            np.ndarray: Resized tile.
+        """
+        resize_factor = self.resize_factor.value
+        if resize_factor == 1.0:
+            return tile
+        new_width = max(1, int(round(tile.shape[1] * resize_factor)))
+        new_height = max(1, int(round(tile.shape[0] * resize_factor)))
+        return cv2.resize(
+            tile,
+            (new_width, new_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
 
     def __iter__(self):
         """
@@ -413,6 +498,8 @@ class SlideLoader:
         """
         Closes the queue and joins the process.
         """
+        if self.termination_event is not None:
+            self.termination_event.set()
         self.p.join()
         if self.downloaded_slide is not None:
             logger.info(f"Removing downloaded slide {self.downloaded_slide}")
@@ -435,35 +522,48 @@ class PostProcessor:
     6. Adding the polygons to a list for later writing to a GeoJSON file.
     """
 
-    def __init__(self, labels: list[str], manager: tmproc.Manager = None):
+    def __init__(
+        self,
+        manager: tmproc.Manager = None,
+        n_workers: int = 1,
+        labels: list[str] | None = None,
+    ):
         """
         Args:
-            labels (list[str]): Ordered list of labels for the classes.
-                Background (0) should not be included.
             manager (tmproc.Manager, optional): Manager to use for shared memory.
+            n_workers (int, optional): Number of inference workers that will send a None
+                sentinel when done. Defaults to 1.
+            labels (list[str], optional): List of class labels. If provided, enables
+                multi-class mode where data should be (masks, class_masks) tuples.
+                If None, single-class mode is used with default "cell" label.
         """
+        self.n_workers = n_workers
         self.labels = labels
 
         if manager is None:
             manager = tmproc.Manager()
 
         self.n = manager.Value("i", 0)
-        self.polygons = manager.Queue()
+        self.polygons = tmproc.Queue()
         self.value = manager.Value("i", 0)
         self.n_cells = manager.Value("i", 0)
         self.n_invalid_cells = manager.Value("i", 0)
-        self.q = manager.Queue()
-        self.p = tmproc.Process(target=self.run)
+        self.q = tmproc.Queue(maxsize=MAX_QUEUE_SIZE)
+        self.p = tmproc.Process(target=self.run, args=(self.n_workers,))
         self.p.start()
 
-    def run(self):
+    def run(self, n_workers: int = 1):
         """
         Generic run method for the process.
         """
+        sentinels_remaining = n_workers
         while True:
             item = self.q.get()
             if item is None:
-                break
+                sentinels_remaining -= 1
+                if sentinels_remaining == 0:
+                    break
+                continue
             self(*item)
 
     def put(self, data: list[tuple]):
@@ -477,36 +577,47 @@ class PostProcessor:
 
     def __call__(
         self,
-        data: list[tuple[np.ndarray, np.ndarray]],
+        data: list[tuple[np.ndarray, np.ndarray] | np.ndarray],
         batch_coords: list[tuple[int, int]],
-        ts: float,
+        prediction_to_slide_scale: float,
     ):
         """
         Data preprocessing following the aforementioned protocol. Appends everything
         to the polygons list, which is a shared memory list.
 
         Args:
-            data (list[tuple]): Data to process. Should be a list of tuples, where each
-                tuple contains the instance mask and class mask.
+            data (list[tuple | np.ndarray]): Data to process. For multi-class mode,
+                should be a list of (masks, class_masks) tuples. For single-class mode,
+                should be a list of masks arrays.
             batch_coords (list[tuple[int, int]]): List of coordinates for the batch.
-            ts (float): Target downsample.
+            prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
         """
         for datum, coords in zip(data, batch_coords):
-            masks, class_masks = datum
-            u = np.unique(masks)
-            u = u[u > 0]
+            if self.labels is not None:
+                masks, class_masks = datum
+            else:
+                masks = datum
+                class_masks = None
+            object_slices = ndimage.find_objects(masks)
             curr_cells = []
-            for i in u:
-                cell_mask = masks == i
-                curr_coords = (
-                    cv2.findContours(
-                        np.uint8(cell_mask),
-                        cv2.RETR_EXTERNAL,
-                        cv2.CHAIN_APPROX_SIMPLE,
-                    )[0][0][:, 0]
-                    * ts
-                    + coords
+            for label_idx, object_slice in enumerate(object_slices, start=1):
+                if object_slice is None:
+                    continue
+                y_slice, x_slice = object_slice
+                cell_mask = masks[y_slice, x_slice] == label_idx
+                contours = cv2.findContours(
+                    np.uint8(cell_mask),
+                    cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_SIMPLE,
+                )[0]
+                if len(contours) == 0:
+                    self.n_invalid_cells.value += 1
+                    continue
+                # Contour only the object bbox, then shift back to tile coordinates.
+                curr_coords = contours[0][:, 0] + np.array(
+                    [x_slice.start, y_slice.start]
                 )
+                curr_coords = curr_coords * prediction_to_slide_scale + coords
                 # discard invalid polygons as these cannot be read in QuPath
                 if curr_coords.shape[0] < 4:
                     self.n_invalid_cells.value += 1
@@ -518,14 +629,24 @@ class PostProcessor:
                 center = np.round(polygon.centroid.coords[0], 2).tolist()
                 curr_coords = curr_coords.tolist()
                 curr_coords.append(curr_coords[0].copy())
-                cl = class_masks[cell_mask][0]
+
+                if class_masks is not None:
+                    cl = class_masks[y_slice, x_slice][cell_mask][0]
+                    label = self.labels[int(cl) - 1]
+                    color = COLORMAP[int(cl) - 1]
+                    class_int = int(cl) - 1
+                else:
+                    label = "cell"
+                    color = [0, 168, 132]
+                    class_int = 0
+
                 curr_cell = {
                     "id": str(uuid.uuid4()),
                     "coords": curr_coords,
-                    "class_int": int(cl) - 1,
+                    "class_int": class_int,
                     "area": polygon.area,
-                    "label": self.labels[int(cl) - 1],
-                    "color": COLORMAP[int(cl) - 1],
+                    "label": label,
+                    "color": color,
                     "perimeter": polygon.length,
                     "centroid": center,
                 }
@@ -548,9 +669,11 @@ def worker(
     slide_queue_size: tmproc.Value,
     n_cells: tmproc.Value,
     n_invalid_cells: tmproc.Value,
+    slide_downsample: float = 1,
     bsize: int = 256,
-    target_downsample: float = 1,
-    bf16: bool = False,
+    prediction_to_slide_scale: float = 1,
+    precision: str = "bf16",
+    inference_threads: int | None = None,
 ):
     """
     Worker function for parallel prediction of tiles. Takes a number of shared
@@ -570,58 +693,121 @@ def worker(
         slide_queue_size (tmproc.Value): tmp Value to count total number of tiles.
         n_cells (tmproc.Value): tmp Value to count number of cells.
         n_invalid_cells (tmproc.Value): tmp Value to count number of invalid cells.
+        slide_downsample (float): Pyramid downsample used to read tiles.
         bsize (int): Batch size.
-        target_downsample (float): Target downsample.
+        prediction_to_slide_scale (float): Level-0 pixels per prediction pixel.
+        precision (str): Inference precision ('fp32', 'fp16' or 'bf16').
+        inference_threads (int): Number of threads overlapping the gpu forward
+            pass with cpu pre/post-processing. Defaults to None (2 if device is
+            'cuda' and 1 if device is 'cpu' or 'mps').
     """
-    model = ClassposeModel(
-        gpu=dev.type == "cuda",
-        pretrained_model=model_path,
-        device=dev,
-        nclasses=n_classes,
-        feature_transformation_structure=fts,
-    )
-    model.net.eval()
-    if bf16:
-        model.net = model.net.half()
     if isinstance(dev, str):
         dev = torch.device(dev)
-    if dev.type == "cuda":
-        model.net = torch.compile(model.net)
+    model = None
+    tile = masks = raw_data = class_masks = styles = None
 
-    with tqdm(
-        None,
-        desc="Predicted tiles (detected cells: 0)",
-        position=1,
-        total=0,
-    ) as pbar:
-        while True:
-            tile, coords = slide_queue.get()
-            if tile is None:
-                break
-            masks, raw_data, class_masks, styles = model.eval(
-                [tile],
-                batch_size=batch_size,
-                augment=tta,
-                bsize=bsize,
-                compute_masks=True,
-            )
-            postproc_queue.put(
-                (list(zip(masks, class_masks)), [coords], target_downsample)
-            )
-            predicted_tiles.value += 1
+    if inference_threads is None:
+        if dev.type == "cuda":
+            inference_threads = DEFAULT_INFERENCE_THREADS_GPU
+        else:
+            inference_threads = DEFAULT_INFERENCE_THREADS_CPU_MPS
 
-            pbar.n = predicted_tiles.value
-            pbar.total = slide_queue_size.value
+    try:
+        model = ClassposeModel(
+            gpu=dev.type == "cuda",
+            pretrained_model=model_path,
+            device=dev,
+            nclasses=n_classes,
+            feature_transformation_structure=fts,
+            precision=precision,
+        )
+        model.net.eval()
+        if dev.type == "cuda":
+            model.net = torch.compile(model.net)
+
+        n_threads = max(1, inference_threads)
+        local_q: queue.Queue = queue.Queue(maxsize=n_threads * 2)
+        update_lock = threading.Lock()
+
+        def _feeder():
+            """Move tiles from the shared queue into the local queue."""
+            while True:
+                tile, coords = slide_queue.get()
+                if tile is None:
+                    break
+                local_q.put((tile, coords))
+            for _ in range(n_threads):
+                local_q.put(None)
+
+        with tqdm(
+            None,
+            desc="Predicted tiles (detected cells: 0)",
+            position=1,
+            total=0,
+        ) as pbar:
+
+            def _process(tile, coords):
+                masks, raw_data, class_masks, styles = model.eval(
+                    [tile],
+                    batch_size=batch_size,
+                    augment=tta,
+                    bsize=bsize,
+                    compute_masks=True,
+                )
+                postproc_queue.put(
+                    (
+                        list(zip(masks, class_masks)),
+                        [coords],
+                        prediction_to_slide_scale,
+                    )
+                )
+                with update_lock:
+                    predicted_tiles.value += 1
+                    pbar.n = predicted_tiles.value
+                    pbar.total = slide_queue_size.value
+                    pbar.set_description(
+                        f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
+                    )
+                    pbar.refresh()
+
+            def _run_inference():
+                while True:
+                    item = local_q.get()
+                    if item is None:
+                        break
+                    _process(*item)
+
+            feeder = threading.Thread(target=_feeder, daemon=True)
+            feeder.start()
+
+            # Compile on the first tile single-threaded to avoid concurrent first-compilation.
+            first = local_q.get()
+            if first is None:
+                local_q.put(None)
+            else:
+                _process(*first)
+
+            inference_threads = [
+                threading.Thread(target=_run_inference, daemon=True)
+                for _ in range(n_threads)
+            ]
+            for t in inference_threads:
+                t.start()
+            for t in inference_threads:
+                t.join()
+            feeder.join()
+
             pbar.set_description(
                 f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
             )
-            pbar.refresh()
-
+            print()
+    finally:
+        tile = masks = raw_data = class_masks = styles = None
+        model = None
+        gc.collect()
+        if dev.type == "cuda":
+            torch.cuda.empty_cache()
         postproc_queue.put(None)
-        pbar.set_description(
-            f"Predicted tiles (detected cells: {n_cells.value}; invalid: {n_invalid_cells.value})"
-        )
-        print()
 
 
 def to_geojson_polygon(curr_cell: dict) -> dict:
@@ -785,9 +971,12 @@ def shapely_polygon_to_geojson(
     object_type: str = "annotation",
     additional_properties: dict | None = None,
 ) -> list[dict]:
-    if isinstance(polygon, shapely.MultiPolygon):
+    if isinstance(polygon, (shapely.MultiPolygon, shapely.GeometryCollection)):
         features = []
         for poly in polygon.geoms:
+            # skip linestrings as they lead to problems down the line
+            if isinstance(poly, shapely.LineString):
+                continue
             features.extend(
                 shapely_polygon_to_geojson(
                     poly,
@@ -798,6 +987,8 @@ def shapely_polygon_to_geojson(
             )
         return features
 
+    if isinstance(polygon, shapely.LineString):
+        return []
     exterior = [list(pt) for pt in polygon.exterior.coords]
     interiors = [[list(pt) for pt in ring.coords] for ring in polygon.interiors]
     coordinates = [exterior, *interiors]
@@ -835,6 +1026,63 @@ def shapely_polygon_to_geojson(
     ]
 
 
+def _repair_geometry(
+    polygon: shapely.Geometry,
+) -> shapely.Geometry:
+    """
+    Repair an invalid geometry, preserving holes where possible.
+
+    Args:
+        polygon (shapely.Geometry): The geometry to repair.
+
+    Returns:
+        shapely.Geometry: A valid geometry.
+    """
+    try:
+        repaired = shapely.make_valid(polygon, method="structure")
+        if repaired.is_valid and not repaired.is_empty:
+            return repaired
+    except shapely.errors.GEOSException:
+        pass
+    return polygon.buffer(0)
+
+
+def make_valid(
+    polygon: shapely.Polygon | shapely.MultiPolygon | shapely.Geometry,
+) -> shapely.Polygon | shapely.MultiPolygon | shapely.GeometryCollection:
+    """
+    Makes a polygon valid and returns either a polygon or a multi-polygon,
+    both ready for use in downstream functions.
+
+    Args:
+        polygon (shapely.Polygon | shapely.MultiPolygon | shapely.Geometry): The
+            polygon to make valid.
+
+    Returns:
+        shapely.Polygon | shapely.MultiPolygon | shapely.GeometryCollection: The valid polygon.
+    """
+    if isinstance(polygon, shapely.Polygon):
+        if polygon.is_valid:
+            return polygon
+        return _repair_geometry(polygon)
+
+    if isinstance(polygon, shapely.MultiPolygon):
+        geoms = []
+        for geom in polygon.geoms:
+            geom = make_valid(geom)
+            if isinstance(geom, shapely.MultiPolygon):
+                geoms.extend(geom.geoms)
+            else:
+                geoms.append(geom)
+        if not geoms:
+            return shapely.MultiPolygon([])
+        if len(geoms) == 1:
+            return geoms[0]
+        return shapely.MultiPolygon(geoms)
+
+    return _repair_geometry(polygon)
+
+
 def load_roi_polygons(
     roi_geojson_path: str, group_by_class: bool = False
 ) -> (
@@ -861,11 +1109,17 @@ def load_roi_polygons(
     polys = []
     class_dict = {}
 
+    if isinstance(data, list):
+        data = {"features": data}
+    if "features" not in data and "geometry" in data:
+        data["features"] = [data]
+
     for feat in data.get("features", []):
         geom = feat.get("geometry")
         if not geom:
             continue
         shp = shapely.geometry.shape(geom)
+        shp = make_valid(shp)
 
         class_name = None
         if group_by_class:
@@ -873,6 +1127,11 @@ def load_roi_polygons(
             classification = props.get("classification", {})
             class_name = classification.get("name", "unknown")
 
+        if isinstance(shp, shapely.LineString):
+            coords = [(x, y) for x, y in zip(*shp.coords.xy)]
+            coords = coords + [coords[0]]
+            shp = shapely.Polygon(coords)
+            shp = shapely.make_valid(shp)
         if isinstance(shp, shapely.Polygon):
             polys.append(shp)
             if group_by_class:
@@ -1191,6 +1450,7 @@ def filter_tile(tile: np.ndarray) -> bool:
 
 def main(args):
     tmproc.set_start_method("spawn", force=True)
+    termination_event = Event()
 
     if args.tile_size < MIN_TILE_SIZE:
         raise ValueError(
@@ -1249,12 +1509,35 @@ def main(args):
         min_area=args.min_area,
         roi_tree=roi_tree,
         device=devices[0],
+        termination_event=termination_event,
     )
-    pp = PostProcessor(labels=labels, manager=manager)
-    # Wait for slide to be initialized so that the target downsample is known
+    pp = PostProcessor(labels=labels, manager=manager, n_workers=len(devices))
+    # Wait for slide to be initialized so that the target scale is known
     while slide.ts.value == 0:
         time.sleep(0.1)
     ts = float(slide.ts.value)
+    mpp_x = float(slide.mpp_x.value)
+    mpp_y = float(slide.mpp_y.value)
+    prediction_to_slide_scale = min(
+        model_config.mpp / mpp_x,
+        model_config.mpp / mpp_y,
+    )
+    logger.info(
+        "Prediction-to-slide coordinate scale: %s",
+        prediction_to_slide_scale,
+    )
+
+    collected_batches: list = []
+
+    def _drain_polygons():
+        while True:
+            item = pp.polygons.get()
+            if item is None:
+                break
+            collected_batches.append(item)
+
+    drain_thread = threading.Thread(target=_drain_polygons, daemon=True)
+    drain_thread.start()
 
     if len(devices) > 1:
         workers = []
@@ -1276,9 +1559,11 @@ def main(args):
                     slide.n,
                     pp.n_cells,
                     pp.n_invalid_cells,
-                    256,
                     ts,
-                    args.bf16,
+                    256,
+                    prediction_to_slide_scale,
+                    args.precision,
+                    args.inference_threads,
                 ),
             )
             p.start()
@@ -1299,23 +1584,28 @@ def main(args):
             slide_queue_size=slide.n,
             n_cells=pp.n_cells,
             n_invalid_cells=pp.n_invalid_cells,
+            slide_downsample=ts,
             bsize=256,
-            target_downsample=ts,
-            bf16=args.bf16,
+            prediction_to_slide_scale=prediction_to_slide_scale,
+            precision=args.precision,
+            inference_threads=args.inference_threads,
         )
+
     pp.p.join()
+    slide.close()
+    pp.polygons.put(None)
+    drain_thread.join()
 
     polygons = []
     with tqdm(desc="Collecting polygons") as pbar:
-        while not pp.polygons.empty():
-            polygons.extend([to_geojson_polygon(x) for x in pp.polygons.get()])
+        for batch in collected_batches:
+            polygons.extend([to_geojson_polygon(x) for x in batch])
             pbar.update()
     logger.info(f"Number of detected cells: {len(polygons)}")
     logger.info(f"Number of invalid cells: {pp.n_invalid_cells.value}")
     if len(polygons) == 0:
         logger.warning("No cells detected")
         logger.info("Exiting")
-        slide.close()
         return
 
     logger.info("Creating GeoJSON file")
@@ -1678,10 +1968,12 @@ def main_with_args():
         "Multi-GPU execution can be specified as 'cuda:0,1' or 'cuda:0,1,2,3'.",
     )
     parser.add_argument(
-        "--bf16",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Triggers bf16 inference.",
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["fp32", "fp16", "bf16"],
+        help="Inference precision. 'bf16' falls back to 'fp16' on GPUs without "
+        "hardware bf16 support.",
     )
     parser.add_argument(
         "--tile_size",
@@ -1715,6 +2007,14 @@ def main_with_args():
         "'csv' generates cellular density statistics (cells/mm²) per class. "
         "'spatialdata' generates a unified SpatialData Zarr store containing all outputs. "
         "Can specify multiple types separated by spaces (e.g., --output_type csv spatialdata).",
+    )
+    parser.add_argument(
+        "--inference_threads",
+        type=int,
+        default=None,
+        help="Number of inference threads per worker process. Values >1 overlap the "
+        "GPU forward pass with CPU pre/post-processing. Defaults to 2 if device is "
+        "`cuda` and 1 if device is `cpu` or `mps`",
     )
     args = parser.parse_args()
 

@@ -77,7 +77,9 @@ Optional arguments:
   --device DEVICE       Device to use for inference. If None, automatically infers the device
                         and supports multi-device execution when available.
                         Multi-GPU execution can be specified as 'cuda:0,1' or 'cuda:0,1,2,3'.
-  --bf16, --no-bf16     Enables bfloat16 inference for supported devices.
+  --precision {fp32,fp16,bf16}
+                        Inference precision (default: bf16). 'bf16' falls back to
+                        'fp16' on GPUs without hardware bf16 support.
   --tile_size TILE_SIZE
                         Tile size for inference.
   --overlap OVERLAP     Tile overlap for inference.
@@ -86,6 +88,9 @@ Optional arguments:
                         (cells/mm²) per class. 'spatialdata' generates a unified SpatialData Zarr
                         store containing all outputs. Can specify multiple types separated by
                         spaces (e.g. --output_type csv spatialdata).
+  --inference-threads INFERENCE_THREADS
+                        Number of inference threads per worker process. Values >1 overlap the
+                        gpu forward pass with cpu pre/post-processing. (default: 2)
 ```
 
 **Important:**
@@ -94,6 +99,7 @@ Optional arguments:
 - **Tissue / artefact models:** specifying either `--tissue_detection_model_path` or `--artefact_detection_model_path` will download the corresponding GrandQC models to that path if they are not present. This makes use of the GrandQC models available in Zenodo ([tissue model](https://zenodo.org/records/14507273) and [artefact model](https://zenodo.org/records/14041538)). Please note that if you use any part of Classpose which makes use of GrandQC please follow the instructions at [here](https://github.com/cpath-ukk/grandqc/tree/main) to cite them appropriately. Similarly to Classpose, GrandQC is under a non-commercial license whose terms can be found at [here](https://github.com/cpath-ukk/grandqc/blob/main/LICENSE).
 - **Output types:** if you request `--output_type csv` or `--output_type spatialdata` (or both), `--tissue_detection_model_path` **must** be provided; otherwise the CLI will error.
 - **ROI-aware densities:** when `--roi_geojson` and `--output_type` include `csv` and/or `spatialdata`, densities are computed per ROI class. If `--roi_class_priority` is given, it is used to resolve cells that fall into overlapping ROIs.
+- **Throughput on multi-GPU machines:** inference threading is on by default (`--inference-threads 2`) and get us close to the GPU forward pass being overlapped with the CPU pre/post-processing: we have found that modern GPUs (at least RTX 3090 equivalent or above) can easily have two Classpose models running on the same GPU through threading as the post-processing (mask computation) can take longer than the inference itself. For example, while using `--tile_size 1024 --batch_size 16 --inference-threads 1` uses about 2.8GB VRAM, using `--tile_size 1024 --batch_size 16 --inference-threads 2` uses a little under 4GB VRAM.
 
 Examples:
 
@@ -169,26 +175,53 @@ cell_types:
 
 ## Training
 
-Classpose supports custom model training with features like sparse annotation support, class weighting, and uncertainty-based loss balancing.
+Classpose supports custom model training with features like sparse annotation support, class weighting, and uncertainty-based loss balancing. We support training with both numpy arrays and HDF5 files.
 
-**Basic example:**
+The expected formats are as follows:
+- For **arrays**, we expect the images to be numpy arrays with shape (C, H, W) and the labels to be numpy arrays with shape (2, H, W) where the first channel contains instance labels and the second channel contains class labels.
+- For **HDF5**, we expect the images to be stored in a dataset named "images" and the labels to be stored in a dataset named "labels". The labels should have 5 channels: [instance mask, binary cell mask, classification cell mask, flow_y, flow_x].
+
+**Basic example using arrays:**
 
 ```python
 from classpose.models import ClassposeModel
 from classpose.train import train_class_seg
+from classpose.train_utils import load_data_arrays
 
 # Initialize model
-model = ClassposeModel(gpu=True, pretrained_model="cpsam", nclasses=6)
+model = ClassposeModel(
+  gpu=True, pretrained_model="cpsam", nclasses=6)
 
-# Train (expects data as lists of numpy arrays with shape (C, H, W))
-# Labels should have 2 channels: [instances, class] where the last channel contains class labels
-# Optionally 4 channels: [instances, flow_y, flow_x, class] if flows are pre-computed
+train_images, train_labels = load_data_arrays(
+  "train_images.npy", "train_labels.npy")
+dataset = process_and_build_dataset(train_images, train_labels)
+
 train_class_seg(
     net=model.net,
-    train_data=train_images,      # List of image arrays
-    train_labels=train_labels,    # List of label arrays 
-    test_data=test_images,        # Optional validation data
-    test_labels=test_labels,
+    train_dataset=dataset,
+    n_epochs=100,
+    batch_size=4,
+    save_path="./models",
+    model_name="my_classpose_model"
+)
+```
+
+**Basic example with HDF5**
+
+```python
+from classpose.models import ClassposeModel
+from classpose.train import train_class_seg
+from classpose.dataset import ClassposeHDF5Dataset
+
+# Initialize model
+model = ClassposeModel(
+  gpu=True, pretrained_model="cpsam", nclasses=6)
+
+dataset = ClassposeHDF5Dataset("dataset.h5")
+
+train_class_seg(
+    net=model.net,
+    train_dataset=dataset,
     n_epochs=100,
     batch_size=4,
     save_path="./models",
@@ -197,6 +230,12 @@ train_class_seg(
 ```
 
 For a complete training example with data loading, oversampling, and advanced options, see [`paper_experiments/run_training.py`](./paper_experiments/run_training.py).
+
+Notes:
+- Multi-GPU training is supported via `uv run torchrun --standalone --nnodes=1 --nproc_per_node=<N> paper_experiments/run_training.py ...`.
+- Training only accepts `--device auto`, `--device cpu`, `--device mps`, or `--device cuda`. To choose one or more CUDA GPUs for either single-process or distributed training, set `CUDA_VISIBLE_DEVICES=...` and pass `--device cuda`; in distributed runs, `torchrun` then uses `LOCAL_RANK` to choose the per-rank device.
+- Resume training is supported with `--resume_checkpoint <path/to/checkpoint.train.pt>`.
+- In distributed runs, `--batch_size` is per rank and `--lr_scaling {none,sqrt}` controls optional LR scaling.
 
 ## QuPath extension
 
