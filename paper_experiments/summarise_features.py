@@ -243,14 +243,8 @@ def load_geojson_multipolygon(
     Returns:
         List of tuples containing (polygon, classification_name)
     """
-    with open(geojson_path) as o:
-        geojson = json.load(o)
 
-    features = geojson.get("features", [])
-    polygons_with_class = []
-
-    for feature in features:
-        coordinates = feature["geometry"]["coordinates"]
+    def get_polygon_and_classification(coordinates, properties):
         if len(coordinates) > 1:
             shell, holes = coordinates[0], coordinates[1:]
         else:
@@ -258,11 +252,34 @@ def load_geojson_multipolygon(
         polygon = shapely.Polygon(shell, holes=holes)
         polygon = shapely.make_valid(polygon)
         shapely.prepare(polygon)
-        properties = feature.get("properties", {})
         classification = properties.get("classification", {}).get(
             "name", "Tissue"
         )
-        polygons_with_class.append((polygon, classification))
+        return polygon, classification
+
+    with open(geojson_path) as o:
+        geojson = json.load(o)
+
+    features = geojson.get("features", [])
+    polygons_with_class = []
+
+    for feature in features:
+        geom_type = feature["geometry"]["type"]
+        if geom_type not in ["Polygon", "MultiPolygon"]:
+            continue
+        if geom_type == "Polygon":
+            polygon, classification = get_polygon_and_classification(
+                feature["geometry"]["coordinates"],
+                feature.get("properties", {}),
+            )
+            polygons_with_class.append((polygon, classification))
+        elif geom_type == "MultiPolygon":
+            for polygon_coords in feature["geometry"]["coordinates"]:
+                polygon, classification = get_polygon_and_classification(
+                    polygon_coords,
+                    feature.get("properties", {}),
+                )
+                polygons_with_class.append((polygon, classification))
 
     return polygons_with_class
 
