@@ -54,6 +54,7 @@ COEFS_COLS = [
     "t_values",
     "p_values",
 ]
+MIN_CELL_FRACTION_WARNING = 0.03
 
 logger = get_logger(__name__)
 
@@ -106,9 +107,10 @@ if __name__ == "__main__":
 
     cell_type_dict = {k: i for i, k in enumerate(CELL_TYPES)}
 
+    failed_samples = []
     all_stats = []
     all_coefficients = []
-    for identifier in tqdm(data_dict, desc="Processing samples"):
+    for identifier in tqdm(list(data_dict.keys()), desc="Processing samples"):
         cells_path = data_dict[identifier]["parquet"]
         geojson_path = data_dict[identifier]["geojson"]
         cells, polygon_areas, _ = load_cells(
@@ -116,6 +118,15 @@ if __name__ == "__main__":
             geojson_path,
             calculate_distances=True,
         )
+        n_cells = cells["cancer_mask"].shape[0]
+        n_cancer_cells = (cells["cancer_mask"] == 1).sum()
+        cancer_frac = n_cancer_cells / n_cells
+        if cancer_frac < MIN_CELL_FRACTION_WARNING or cancer_frac > (
+            1 - MIN_CELL_FRACTION_WARNING
+        ):
+            logger.warning(
+                f"\nSample {identifier} has {cancer_frac} cancer cells"
+            )
         dummy_col_names = [
             f"dummy_classification_{i}" for i in range(len(cell_type_dict))
         ]
@@ -160,11 +171,16 @@ if __name__ == "__main__":
         ]
         for feature in FEATURES:
             expr = [pl.col(k) for k in X_col_names]
-            coefficients = cells.select(
-                ((pl.col(feature) - pl.mean(feature)) / pl.std(feature))
-                .least_squares.ols(*expr, mode="statistics")
-                .alias("coef")
-            ).unnest("coef")
+            try:
+                coefficients = cells.select(
+                    ((pl.col(feature) - pl.mean(feature)) / pl.std(feature))
+                    .least_squares.ols(*expr, mode="statistics")
+                    .alias("coef")
+                ).unnest("coef")
+            except Exception as e:
+                logger.warning(f"\nSample {identifier} failed")
+                failed_samples.append(identifier)
+                break
             stats = coefficients.select(STATS_COLS).with_columns(
                 pl.lit(identifier).alias("identifier"),
                 pl.lit(feature).alias("feature"),
@@ -179,6 +195,7 @@ if __name__ == "__main__":
             all_coefficients.append(coefficients)
 
     logger.info(f"Finished processing samples")
+    logger.warning(f"Failed samples: {failed_samples}")
     all_stats = pl.concat(all_stats)
     all_coefficients = pl.concat(all_coefficients)
     final_df = all_coefficients.join(all_stats, on=["identifier", "feature"])
