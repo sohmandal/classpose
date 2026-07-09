@@ -47,6 +47,7 @@ from tqdm import tqdm
 
 from classpose.log import get_logger
 from classpose import WSIReader
+from classpose.utils import get_slide_resolution
 
 logger = get_logger(__name__)
 
@@ -91,7 +92,9 @@ class CellLoader:
         self.geojson_path = geojson_path
         self.n_workers = n_workers
         self.n_workers_extraction = n_workers_extraction
-        self.geojson_scale = 1.0 if geojson_scale is None else float(geojson_scale)
+        self.geojson_scale = (
+            1.0 if geojson_scale is None else float(geojson_scale)
+        )
 
         with open(self.geojson_path) as f:
             self.geojson = json.load(f)
@@ -212,6 +215,7 @@ class FeatureExtraction:
     - Intensity features: mean, standard deviation and entropy for RGB channels
     and for HED (haematoxylin, eosin, DAB) channels.
     """
+
     def __init__(self, cell_loader: CellLoader, n_workers: int = 1):
         """
         Args:
@@ -220,6 +224,11 @@ class FeatureExtraction:
         """
         self.cell_loader = cell_loader
         self.n_workers = n_workers
+
+        wsi = WSIReader(cell_loader.wsi_path)
+        mpp_x, mpp_y = get_slide_resolution(wsi)
+        self.mpp = (mpp_x + mpp_y) / 2.0
+        logger.info(f"Slide MPP: x={mpp_x}, y={mpp_y}, mean={self.mpp}")
 
         self.processes = []
 
@@ -242,7 +251,9 @@ class FeatureExtraction:
         state.pop("processes", None)
         return state
 
-    def _entropy_from_quantized(self, qvals: np.ndarray, bins: int) -> np.ndarray:
+    def _entropy_from_quantized(
+        self, qvals: np.ndarray, bins: int
+    ) -> np.ndarray:
         """
         Computes entropy from quantized values.
 
@@ -263,7 +274,9 @@ class FeatureExtraction:
         np.log2(probs, out=log_probs, where=probs > 0)
         return -(probs * log_probs).sum(axis=1)
 
-    def extract_3channel_features(self, norm: np.ndarray, channel_names: str) -> dict:
+    def extract_3channel_features(
+        self, norm: np.ndarray, channel_names: str
+    ) -> dict:
         """
         Extracts features from a normalized image with 3 channels. It calculates,
         for each channel, its mean, standard deviation and entropy.
@@ -299,7 +312,9 @@ class FeatureExtraction:
         else:
             lo, hi = HED_ENTROPY_RANGE
             scale = (ENTROPY_BINS - 1) / max(hi - lo, EPS)
-            qvals = np.clip(((norm - lo) * scale).astype(np.int32), 0, ENTROPY_BINS - 1)
+            qvals = np.clip(
+                ((norm - lo) * scale).astype(np.int32), 0, ENTROPY_BINS - 1
+            )
             entropy = self._entropy_from_quantized(qvals, bins=ENTROPY_BINS)
 
         features = {
@@ -366,21 +381,36 @@ class FeatureExtraction:
             solidity = np.nan
 
         formfactor = 4 * np.pi * polygon.area / max(polygon.length**2, EPS)
+        mpp = self.mpp
         features = {
-            "area": polygon.area,
-            "perimeter": polygon.length,
-            "convex_hull_area": polygon.convex_hull.area,
-            "minor_axis": minor_axes,
-            "major_axis": major_axes,
+            "area": polygon.area * mpp**2,
+            "perimeter": polygon.length * mpp,
+            "convex_hull_area": polygon.convex_hull.area * mpp**2,
+            "minor_axis": minor_axes * mpp,
+            "major_axis": major_axes * mpp,
             "eccentricity": eccentricity,
             "orientation": orientation,
             "solidity": solidity,
             "formfactor": formfactor,
         }
 
-        contour = np.array(polygon.exterior.coords, dtype=np.float32).reshape(-1, 1, 2)
+        contour = np.array(polygon.exterior.coords, dtype=np.float32).reshape(
+            -1, 1, 2
+        )
         moments = cv2.moments(contour)
-        features.update(moments)
+        scaled_moments = {}
+        for key, val in moments.items():
+            if key.startswith("m"):
+                p = int(key[1])
+                q = int(key[2])
+                scaled_moments[key] = val * mpp ** (p + q + 2)
+            elif key.startswith("mu"):
+                p = int(key[2])
+                q = int(key[3])
+                scaled_moments[key] = val * mpp ** (p + q + 2)
+            else:
+                scaled_moments[key] = val
+        features.update(scaled_moments)
 
         return features
 
@@ -446,7 +476,9 @@ class FeatureExtraction:
                     continue
                 pbar.update()
                 if pbar.n % 1000 == 0:
-                    pbar.set_description(fmt.format(self.cell_loader.loaded_cells.value))
+                    pbar.set_description(
+                        fmt.format(self.cell_loader.loaded_cells.value)
+                    )
                 yield features
 
     def iter_sp(self):
@@ -474,7 +506,9 @@ class FeatureExtraction:
                 features = self.extract_features(cell)
                 pbar.update()
                 if pbar.n % 1000 == 0:
-                    pbar.set_description(fmt.format(self.cell_loader.loaded_cells.value))
+                    pbar.set_description(
+                        fmt.format(self.cell_loader.loaded_cells.value)
+                    )
                 yield features
 
     def __iter__(self):
@@ -572,7 +606,9 @@ if __name__ == "__main__":
         n_workers_extraction=args.n_workers_feature,
         geojson_scale=args.geojson_scale,
     )
-    feature_extractor = FeatureExtraction(cell_loader, n_workers=args.n_workers_feature)
+    feature_extractor = FeatureExtraction(
+        cell_loader, n_workers=args.n_workers_feature
+    )
 
     all_features = []
     for features in feature_extractor:
