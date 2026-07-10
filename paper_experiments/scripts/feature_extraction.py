@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import time
 import json
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pandas as pd
 import numpy as np
 import shapely
@@ -144,14 +146,14 @@ class CellLoader:
             props = cell["properties"]
             classification = props["classification"]["name"]
             coords = np.array(cell["geometry"]["coordinates"][0])
-            id = cell["id"]
+            cell_id = cell["id"]
             centroid = {
                 p["name"]: p["value"]
                 for p in props["measurements"]
                 if "centroid" in p["name"]
             }
             cell = {
-                "id": id,
+                "id": cell_id,
                 "classification": classification,
                 "coords": shapely.Polygon(coords),
                 **centroid,
@@ -229,6 +231,8 @@ class FeatureExtraction:
         mpp_x, mpp_y = get_slide_resolution(wsi)
         self.mpp = (mpp_x + mpp_y) / 2.0
         logger.info(f"Slide MPP: x={mpp_x}, y={mpp_y}, mean={self.mpp}")
+        if hasattr(wsi, "close"):
+            wsi.close()
 
         self.processes = []
 
@@ -400,13 +404,13 @@ class FeatureExtraction:
         moments = cv2.moments(contour)
         scaled_moments = {}
         for key, val in moments.items():
-            if key.startswith("m"):
-                p = int(key[1])
-                q = int(key[2])
-                scaled_moments[key] = val * mpp ** (p + q + 2)
-            elif key.startswith("mu"):
+            if key.startswith("mu"):
                 p = int(key[2])
                 q = int(key[3])
+                scaled_moments[key] = val * mpp ** (p + q + 2)
+            elif key.startswith("m"):
+                p = int(key[1])
+                q = int(key[2])
                 scaled_moments[key] = val * mpp ** (p + q + 2)
             else:
                 scaled_moments[key] = val
@@ -620,7 +624,12 @@ if __name__ == "__main__":
         if df[col].dtype == "float64":
             df[col] = df[col].astype("float32")
 
-    df.to_parquet(args.output, index=False)
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    existing_meta = table.schema.metadata or {}
+    table = table.replace_schema_metadata(
+        {**existing_meta, b"mpp": str(feature_extractor.mpp).encode()}
+    )
+    pq.write_table(table, args.output)
 
     end_time = time.time()
 
