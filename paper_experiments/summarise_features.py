@@ -29,6 +29,7 @@ import numpy as np
 import shapely
 import shapely.ops
 import polars as pl
+import pyarrow.parquet as pq
 from pathlib import Path
 from tqdm import tqdm
 from scipy.spatial import KDTree
@@ -312,6 +313,8 @@ def load_cells(
         polygon_areas (pl.DataFrame): DataFrame of tissue region areas.
         tissue_area (int): Total area of tissue regions.
     """
+    parquet_meta = pq.read_metadata(cells_path).metadata
+    mpp = float(parquet_meta[b"mpp"]) if b"mpp" in parquet_meta else 1.0
     cells = pl.read_parquet(cells_path)
     cells = expand_features(cells)
     centroids = cells.select(["centroid_x", "centroid_y"]).to_numpy()
@@ -319,14 +322,14 @@ def load_cells(
     lymphocyte_centroids = centroids[cells["classification"] == "Lymphocyte"]
     tree = KDTree(lymphocyte_centroids)
     dist_to_lymph, nearest = tree.query(centroids)
-    cells = cells.with_columns(pl.Series("dist_to_lymph", dist_to_lymph))
+    cells = cells.with_columns(pl.Series("dist_to_lymph", dist_to_lymph * mpp))
 
     cancer_contours = load_geojson_multipolygon(cancer_contours_path)
 
     tissue_area = 0
     if tissue_contours_path:
         tissue_contours = load_geojson_multipolygon(tissue_contours_path)
-        tissue_area = sum([c[0].area for c in tissue_contours])
+        tissue_area = sum([c[0].area for c in tissue_contours]) * mpp**2
         tissue_polys = [p for p, _ in tissue_contours]
         tissue_tree = shapely.STRtree(tissue_polys)
         intersected_contours = []
@@ -348,7 +351,7 @@ def load_cells(
         if cl not in masks:
             masks[cl] = np.zeros(cells.shape[0])
             polygon_areas[cl] = 0
-        polygon_areas[cl] += polygon.area
+        polygon_areas[cl] += polygon.area * mpp**2
         contained_indices = point_tree.query(polygon, predicate="contains")
         masks[cl][contained_indices] = 1
     for cl in masks:
@@ -363,7 +366,7 @@ def load_cells(
                 distance_to_boundary,
             )
         cells = cells.with_columns(
-            pl.Series("distance_to_boundary", distance_to_boundary)
+            pl.Series("distance_to_boundary", distance_to_boundary * mpp)
         )
 
     polygon_areas_df = []
