@@ -178,7 +178,7 @@ cell_types:
 Classpose supports custom model training with features like sparse annotation support, class weighting, and uncertainty-based loss balancing. We support training with both numpy arrays and HDF5 files.
 
 The expected formats are as follows:
-- For **arrays**, we expect the images to be numpy arrays with shape (C, H, W) and the labels to be numpy arrays with shape (2, H, W) where the first channel contains instance labels and the second channel contains class labels.
+- For **arrays**, each image in `images.npy` should have shape `(H, W, C)`, and its corresponding label in `labels.npy` should have shape `(H, W, 2)`. Heights and widths may vary between image-label pairs, but must match within each pair. Label channel 0 contains instance labels and label channel 1 contains class labels.
 - For **HDF5**, we expect the images to be stored in a dataset named "images" and the labels to be stored in a dataset named "labels". The labels should have 5 channels: [instance mask, binary cell mask, classification cell mask, flow_y, flow_x].
 
 **Basic example using arrays:**
@@ -186,15 +186,15 @@ The expected formats are as follows:
 ```python
 from classpose.models import ClassposeModel
 from classpose.train import train_class_seg
-from classpose.train_utils import load_data_arrays
+from classpose.train_utils import load_data_arrays, process_and_build_dataset
 
-# Initialize model
-model = ClassposeModel(
-  gpu=True, pretrained_model="cpsam", nclasses=6)
-
-train_images, train_labels = load_data_arrays(
-  "train_images.npy", "train_labels.npy")
+# The directory must contain images.npy and labels.npy
+train_images, train_labels = load_data_arrays("/path/to/training_data")
 dataset = process_and_build_dataset(train_images, train_labels)
+
+# Initialize the model using the number of classes inferred from the labels
+model = ClassposeModel(
+  gpu=True, pretrained_model="cpsam", nclasses=dataset.n_classes)
 
 train_class_seg(
     net=model.net,
