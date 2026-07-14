@@ -341,7 +341,11 @@ def load_cells(
                 )
                 intersection = polygon.intersection(relevant_tissue)
                 if intersection.area > 0:
-                    intersected_contours.append((intersection, cl))
+                    if intersection.geom_type == "MultiPolygon":
+                        for part in intersection.geoms:
+                            intersected_contours.append((part, cl))
+                    else:
+                        intersected_contours.append((intersection, cl))
         cancer_contours = intersected_contours
 
     masks = {}
