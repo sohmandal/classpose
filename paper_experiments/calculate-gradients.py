@@ -81,6 +81,21 @@ if __name__ == "__main__":
         "corresponding <identifier>.parquet in --cells_path.",
     )
     parser.add_argument(
+        "--tissue_contours_path",
+        type=str,
+        default=None,
+        help="Path to directory containing tissue contours. Each file must be "
+        "named <identifier>_tissue_contours.geojson to match the corresponding "
+        "<identifier>.parquet in --cells_path.",
+    )
+    parser.add_argument(
+        "--geojson_name",
+        type=str,
+        required=False,
+        default="cancer",
+        help="Name of the objects in the GeoJSON.",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         required=True,
@@ -92,19 +107,38 @@ if __name__ == "__main__":
     data_dict = {}
     n_no_match = 0
     cancer_contours_path = Path(args.cancer_contours_path)
+    tissue_contours_path = None
+    if args.tissue_contours_path:
+        tissue_contours_path = Path(args.tissue_contours_path)
     for parquet in Path(args.cells_path).rglob("*parquet"):
         identifier = parquet.name.replace(".parquet", "")
-        geojson = Path(f"{cancer_contours_path}/{identifier}.geojson")
+        geojson = cancer_contours_path / f"{identifier}.geojson"
+        if geojson.exists() is False:
+            n_no_match += 1
+            logger.warning(f"Sample {identifier} not found in contours paths")
+            continue
 
-        if geojson.exists():
+        if tissue_contours_path:
+            tissue_geojson = (
+                tissue_contours_path / f"{identifier}_tissue_contours.geojson"
+            )
+            if tissue_geojson.exists() is False:
+                n_no_match += 1
+                logger.warning(
+                    f"Sample {identifier} not found in contours paths"
+                )
+                continue
             data_dict[identifier] = {
                 "parquet": parquet,
                 "geojson": geojson,
+                "tissue_geojson": tissue_geojson,
             }
         else:
-            n_no_match += 1
-            logger.warning(f"Sample {identifier} not found in contours paths")
-
+            data_dict[identifier] = {
+                "parquet": parquet,
+                "geojson": geojson,
+                "tissue_geojson": None,
+            }
     cell_type_dict = {k: i for i, k in enumerate(CELL_TYPES)}
 
     failed_samples = []
@@ -113,13 +147,15 @@ if __name__ == "__main__":
     for identifier in tqdm(list(data_dict.keys()), desc="Processing samples"):
         cells_path = data_dict[identifier]["parquet"]
         geojson_path = data_dict[identifier]["geojson"]
+        tissue_geojson_path = data_dict[identifier]["tissue_geojson"]
         cells, polygon_areas, _ = load_cells(
             cells_path,
             geojson_path,
+            tissue_contours_path=tissue_geojson_path,
             calculate_distances=True,
         )
-        n_cells = cells["cancer_mask"].shape[0]
-        n_cancer_cells = (cells["cancer_mask"] == 1).sum()
+        n_cells = cells[f"{args.geojson_name}_mask"].shape[0]
+        n_cancer_cells = (cells[f"{args.geojson_name}_mask"] == 1).sum()
         cancer_frac = n_cancer_cells / n_cells
         if cancer_frac < MIN_CELL_FRACTION_WARNING or cancer_frac > (
             1 - MIN_CELL_FRACTION_WARNING
@@ -159,7 +195,7 @@ if __name__ == "__main__":
                 (
                     pl.col(dummy_col_names[i])
                     * pl.col("log_dist")
-                    * pl.col("cancer_mask")
+                    * pl.col(f"{args.geojson_name}_mask")
                 ).alias(inter_col_cancer_names[i])
                 for i in range(len(CELL_TYPES))
             ]
