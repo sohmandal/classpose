@@ -326,6 +326,7 @@ def load_cells(
 
     cancer_contours = load_geojson_multipolygon(cancer_contours_path)
 
+    tissue_boundary = None
     tissue_area = 0
     if tissue_contours_path:
         tissue_contours = load_geojson_multipolygon(tissue_contours_path)
@@ -347,6 +348,9 @@ def load_cells(
                     else:
                         intersected_contours.append((intersection, cl))
         cancer_contours = intersected_contours
+        if tissue_polys:
+            tissue_union = shapely.ops.unary_union(tissue_polys)
+            tissue_boundary = tissue_union.boundary
 
     masks = {}
     polygon_areas = {}
@@ -363,12 +367,23 @@ def load_cells(
     if calculate_distances:
         distance_to_boundary = np.ones(cells.shape[0]) * np.inf
         for polygon, cl in cancer_contours:
-            distances = polygon.exterior.distance(points)
+            if tissue_boundary is not None:
+                interface = polygon.boundary.difference(
+                    tissue_boundary.buffer(0.5)
+                )
+            else:
+                interface = polygon.exterior
+            if interface.is_empty:
+                continue
+            distances = interface.distance(points)
             distance_to_boundary = np.where(
                 distances < distance_to_boundary,
                 distances,
                 distance_to_boundary,
             )
+        distance_to_boundary = np.where(
+            np.isinf(distance_to_boundary), np.nan, distance_to_boundary
+        )
         cells = cells.with_columns(
             pl.Series("distance_to_boundary", distance_to_boundary * mpp)
         )
