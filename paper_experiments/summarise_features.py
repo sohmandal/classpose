@@ -313,6 +313,18 @@ def load_cells(
         polygon_areas (pl.DataFrame): DataFrame of tissue region areas.
         tissue_area (int): Total area of tissue regions.
     """
+
+    def _undo_geometry_collection(geom):
+        if geom.geom_type == "GeometryCollection":
+            geom = shapely.ops.unary_union(
+                [
+                    g
+                    for g in geom.geoms
+                    if g.geom_type in ("Polygon", "MultiPolygon")
+                ]
+            )
+        return geom
+
     parquet_meta = pq.read_metadata(cells_path).metadata
     mpp = float(parquet_meta[b"mpp"]) if b"mpp" in parquet_meta else 1.0
     cells = pl.read_parquet(cells_path)
@@ -350,6 +362,7 @@ def load_cells(
         cancer_contours = intersected_contours
         if tissue_polys:
             tissue_union = shapely.ops.unary_union(tissue_polys)
+            tissue_union = _undo_geometry_collection(tissue_union)
             tissue_boundary = tissue_union.boundary
 
     masks = {}
@@ -367,6 +380,7 @@ def load_cells(
     if calculate_distances:
         distance_to_boundary = np.ones(cells.shape[0]) * np.inf
         for polygon, cl in cancer_contours:
+            polygon = _undo_geometry_collection(polygon)
             if tissue_boundary is not None:
                 interface = polygon.boundary.difference(
                     tissue_boundary.buffer(0.5)
