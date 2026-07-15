@@ -124,9 +124,7 @@ if __name__ == "__main__":
             )
             if tissue_geojson.exists() is False:
                 n_no_match += 1
-                logger.warning(
-                    f"Sample {identifier} not found in contours paths"
-                )
+                logger.warning(f"Tissue contours for {identifier} not found")
                 continue
             data_dict[identifier] = {
                 "parquet": parquet,
