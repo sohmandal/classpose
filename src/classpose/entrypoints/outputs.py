@@ -54,6 +54,57 @@ def create_valid_polygon(
         return None
 
 
+def _order_roi_classes(
+    roi_class_dict: dict[str, list[shapely.Polygon]],
+    priority_list: list[str] | None = None,
+) -> list[str]:
+    if priority_list:
+        invalid_classes = [c for c in priority_list if c not in roi_class_dict]
+        if invalid_classes:
+            logger.warning(
+                f"Priority list contains classes not found in ROI: {invalid_classes}"
+            )
+
+        priority_classes = list(
+            dict.fromkeys(c for c in priority_list if c in roi_class_dict)
+        )
+
+        remaining_classes = [
+            c for c in roi_class_dict.keys() if c not in priority_list
+        ]
+
+        ordered_classes = priority_classes + remaining_classes
+
+        logger.info(
+            f"ROI class priority order: {priority_classes} (prioritised), "
+            f"{remaining_classes} (remaining)"
+        )
+    else:
+        ordered_classes = list(roi_class_dict.keys())
+        logger.info("No priority specified, using dictionary order")
+
+    return ordered_classes
+
+
+def calculate_roi_areas(
+    roi_class_dict: dict[str, list[shapely.Polygon]],
+    artefact_polygons: list[shapely.Polygon],
+    priority_list: list[str] | None = None,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Measure ROI and artefact areas using the same priority as cell assignment."""
+    ordered_classes = _order_roi_classes(roi_class_dict, priority_list)
+    claimed = shapely.GeometryCollection()
+    artefacts = shapely.union_all(artefact_polygons)
+    tissue_areas, artefact_areas = {}, {}
+    for class_name in ordered_classes:
+        region = shapely.union_all(roi_class_dict[class_name])
+        effective_region = region.difference(claimed)
+        tissue_areas[class_name] = effective_region.area
+        artefact_areas[class_name] = effective_region.intersection(artefacts).area
+        claimed = claimed.union(region)
+    return tissue_areas, artefact_areas
+
+
 def map_cells_to_roi_classes(
     cells: list[dict],
     roi_class_dict: dict[str, list[shapely.Polygon]],
@@ -75,29 +126,7 @@ def map_cells_to_roi_classes(
             cells contained within those ROI classes.
     """
     logger.info("Mapping cells to ROI classes")
-
-    if priority_list:
-        invalid_classes = [c for c in priority_list if c not in roi_class_dict]
-        if invalid_classes:
-            logger.warning(
-                f"Priority list contains classes not found in ROI: {invalid_classes}"
-            )
-
-        priority_classes = [c for c in priority_list if c in roi_class_dict]
-
-        remaining_classes = [
-            c for c in roi_class_dict.keys() if c not in priority_list
-        ]
-
-        ordered_classes = priority_classes + remaining_classes
-
-        logger.info(
-            f"ROI class priority order: {priority_classes} (prioritised), "
-            f"{remaining_classes} (remaining)"
-        )
-    else:
-        ordered_classes = list(roi_class_dict.keys())
-        logger.info("No priority specified, using dictionary order")
+    ordered_classes = _order_roi_classes(roi_class_dict, priority_list)
 
     roi_trees = {}
     for class_name, polygons in roi_class_dict.items():

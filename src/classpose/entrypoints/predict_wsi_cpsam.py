@@ -61,6 +61,7 @@ for handler in logging.root.handlers[:]:
 
 from classpose.entrypoints.outputs import (
     calculate_cellular_densities,
+    calculate_roi_areas,
     create_spatialdata_output,
     create_valid_polygon,
     map_cells_to_roi_classes,
@@ -593,23 +594,11 @@ def main(args):
                 polygons, roi_class_dict, priority_list=roi_priority
             )
 
-            tissue_areas_by_roi = {}
-            artefact_areas_by_roi = {}
-
-            for roi_class_name, roi_polygons in roi_class_dict.items():
-                roi_total_area = sum(poly.area for poly in roi_polygons)
-                tissue_areas_by_roi[roi_class_name] = roi_total_area
-
-                if args.artefact_detection_model_path:
-                    roi_artefact_area = 0
-                    for artefact_poly in artefact_polygons:
-                        for roi_poly in roi_polygons:
-                            intersection = artefact_poly.intersection(roi_poly)
-                            if not intersection.is_empty:
-                                roi_artefact_area += intersection.area
-                    artefact_areas_by_roi[roi_class_name] = roi_artefact_area
-                else:
-                    artefact_areas_by_roi[roi_class_name] = 0
+            tissue_areas_by_roi, artefact_areas_by_roi = calculate_roi_areas(
+                roi_class_dict,
+                artefact_polygons if args.artefact_detection_model_path else [],
+                priority_list=roi_priority,
+            )
 
             densities_df = calculate_cellular_densities(
                 cells=cells_by_roi_class,
